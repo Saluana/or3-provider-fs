@@ -4,6 +4,7 @@
     "description": "Filesystem storage provider for OR3 Chat — local-disk blob storage via signed tokens.",
     "license": "MIT",
     "type": "module",
+    "sideEffects": false,
     "exports": {
         ".": {
             "types": "./dist/types.d.mts",
@@ -20,10 +21,14 @@
         "dist"
     ],
     "scripts": {
+        "prepack": "bun run build",
         "build": "nuxt-module-build build",
         "lint": "eslint . --max-warnings=0",
         "type-check": "tsc --noEmit",
         "test": "vitest run"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "dependencies": {
         "jsonwebtoken": "^9.0.3"
