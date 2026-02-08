@@ -32,6 +32,7 @@ export default defineNuxtConfig({
 | `OR3_STORAGE_FS_ROOT` | **Yes** | — | Absolute path to the storage root directory |
 | `OR3_STORAGE_FS_TOKEN_SECRET` | **Yes** | — | HMAC secret for signing presign tokens (≥32 chars recommended) |
 | `OR3_STORAGE_FS_URL_TTL_SECONDS` | No | `900` | Token / presigned URL lifetime in seconds |
+| `OR3_STRICT_CONFIG` | No | `false` (`true` in production) | Fail startup when required fs provider config is missing |
 
 ## How It Works
 
@@ -60,14 +61,16 @@ Client (FileTransferQueue)
 $OR3_STORAGE_FS_ROOT/
   workspaces/
     <workspaceId>/
-      <hash>          ← content-addressed blob
+      sha256_<hex>      ← content-addressed blob
+      sha256_<hex>.meta.json  ← commit sidecar used by GC
 ```
 
 ### Security
 
-- **Path traversal prevention**: workspace IDs and hashes are validated against `[a-zA-Z0-9_-]+` and resolved paths are checked to stay under the storage root.
+- **Path traversal prevention**: workspace IDs are validated against `[a-zA-Z0-9_-]+`; hashes must be canonical `sha256:<hex>` or `md5:<hex>` forms and are normalized to safe file keys.
 - **Short-lived tokens**: presigned URLs expire after `OR3_STORAGE_FS_URL_TTL_SECONDS` (default 15 min).
 - **Operation scope**: upload tokens can't be used for download and vice versa.
+- **User scope**: upload/download tokens are bound to the authenticated user and workspace checks.
 - **Atomic writes**: files are written to a temp path first, then renamed to prevent partial-upload corruption.
 
 ## Backup
@@ -78,10 +81,12 @@ The storage root is a plain directory tree. Back it up with any tool:
 rsync -a "$OR3_STORAGE_FS_ROOT" /backup/or3-storage/
 ```
 
+Committed blobs create `.meta.json` sidecars. Include those files in backups so GC does not treat committed blobs as orphans.
+
 ## Development
 
 ```bash
-bun run test        # Run tests (29 tests)
+bun run test        # Run tests
 bun run type-check  # TypeScript check
 bun run build       # Build nuxt module
 ```
@@ -98,8 +103,6 @@ bun run build       # Build nuxt module
 
 ## v2 TODOs
 
-- [ ] Replace `readRawBody` with stream piping for large file uploads
-- [ ] Implement real GC scan using ref metadata from sync layer
 - [ ] Add `Content-Type` header on downloads from stored mime metadata
 - [ ] Sidecar metadata files to avoid directory scans during GC
 

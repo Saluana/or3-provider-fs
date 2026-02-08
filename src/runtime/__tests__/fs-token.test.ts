@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signFsToken, verifyFsToken } from '../server/storage/fs-token';
 
 const TEST_SECRET = 'test-secret-for-unit-tests';
+const HASH = `sha256:${'a'.repeat(64)}`;
 
 describe('fs-token', () => {
     beforeEach(() => {
@@ -13,67 +14,65 @@ describe('fs-token', () => {
 
     afterEach(() => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
+        vi.useRealTimers();
         vi.restoreAllMocks();
     });
 
     it('signs and verifies an upload token', () => {
         const token = signFsToken(
-            { op: 'upload', workspace_id: 'ws1', hash: 'abc123', size_bytes: 1024, mime_type: 'image/png' },
+            {
+                op: 'upload',
+                workspace_id: 'ws1',
+                user_id: 'user-1',
+                hash: HASH,
+                size_bytes: 1024,
+                mime_type: 'image/png',
+            },
             300,
         );
         const claims = verifyFsToken(token);
         expect(claims.op).toBe('upload');
         expect(claims.workspace_id).toBe('ws1');
-        expect(claims.hash).toBe('abc123');
+        expect(claims.user_id).toBe('user-1');
+        expect(claims.hash).toBe(HASH);
         expect(claims.size_bytes).toBe(1024);
         expect(claims.mime_type).toBe('image/png');
         expect(claims.exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
 
     it('signs and verifies a download token', () => {
-        const token = signFsToken({ op: 'download', workspace_id: 'ws2', hash: 'def456' }, 60);
+        const token = signFsToken({ op: 'download', workspace_id: 'ws2', user_id: 'user-2', hash: HASH }, 60);
         const claims = verifyFsToken(token);
         expect(claims.op).toBe('download');
         expect(claims.workspace_id).toBe('ws2');
-        expect(claims.hash).toBe('def456');
+        expect(claims.user_id).toBe('user-2');
+        expect(claims.hash).toBe(HASH);
     });
 
     it('rejects a tampered token', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', hash: 'abc' }, 300);
+        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
         const tampered = token.slice(0, -5) + 'XXXXX';
         expect(() => verifyFsToken(tampered)).toThrow();
     });
 
     it('rejects an expired token', () => {
-        // Sign with 1-second TTL, then advance clock past it
-        const token = signFsToken({ op: 'download', workspace_id: 'ws1', hash: 'h' }, 1);
+        vi.useFakeTimers();
+        const now = new Date('2026-02-08T00:00:00.000Z');
+        vi.setSystemTime(now);
 
-        // JWT checks exp at verify time — mock Date.now to be in the future
-        const realNow = Date.now;
-        Date.now = () => realNow() + 5000;
-        vi.spyOn(global, 'Date').mockImplementation(
-            () => new Date(realNow() + 5000) as unknown as Date,
+        const token = signFsToken(
+            { op: 'download', workspace_id: 'ws1', user_id: 'user-1', hash: HASH },
+            1,
         );
 
-        // jwt.verify compares against current time internally
-        // We need to wait or use a tiny TTL. Use -1 trick: sign already expired
-        Date.now = realNow;
-        vi.restoreAllMocks();
+        vi.setSystemTime(new Date(now.getTime() + 3_000));
+        expect(() => verifyFsToken(token)).toThrow();
 
-        // Better approach: sign with TTL=0 (expires immediately on next second)
-        const expiredToken = signFsToken({ op: 'download', workspace_id: 'ws1', hash: 'h' }, 0);
-        // JWT with expiresIn: 0 sets exp = iat, so it's expired at iat+1
-        // We need to wait 1s or just test with jwt verify clock tolerance
-        // Actually jwt.sign with expiresIn: 0 will create exp=iat which is still valid at iat.
-        // Let's just verify token integrity works and test expiry differently:
-
-        // Use a known-expired approach: sign with negative isn't supported.
-        // Instead, test that verifyFsToken properly throws on wrong secret:
-        expect(expiredToken).toBeTruthy(); // token was created
+        vi.useRealTimers();
     });
 
     it('rejects token signed with wrong secret', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', hash: 'abc' }, 300);
+        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
         process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'different-secret';
         expect(() => verifyFsToken(token)).toThrow();
     });
@@ -81,20 +80,31 @@ describe('fs-token', () => {
     it('throws when secret is not configured (sign)', () => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         expect(() =>
-            signFsToken({ op: 'upload', workspace_id: 'ws1', hash: 'abc' }, 300),
+            signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300),
         ).toThrow('Missing OR3_STORAGE_FS_TOKEN_SECRET');
     });
 
     it('throws when secret is not configured (verify)', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', hash: 'abc' }, 300);
+        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         expect(() => verifyFsToken(token)).toThrow('Missing OR3_STORAGE_FS_TOKEN_SECRET');
     });
 
     it('preserves optional fields as undefined when not set', () => {
-        const token = signFsToken({ op: 'download', workspace_id: 'ws1', hash: 'abc' }, 300);
+        const token = signFsToken(
+            { op: 'download', workspace_id: 'ws1', user_id: 'user-1', hash: HASH },
+            300,
+        );
         const claims = verifyFsToken(token);
         expect(claims.size_bytes).toBeUndefined();
         expect(claims.mime_type).toBeUndefined();
+    });
+
+    it('rejects payloads with invalid hash claim', () => {
+        const token = signFsToken(
+            { op: 'download', workspace_id: 'ws1', user_id: 'user-1', hash: `sha1:${'a'.repeat(40)}` },
+            300,
+        );
+        expect(() => verifyFsToken(token)).toThrow('Invalid hash');
     });
 });

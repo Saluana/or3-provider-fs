@@ -2,44 +2,58 @@
  * Unit tests for fs-paths safe path resolution and traversal prevention.
  */
 import { describe, it, expect } from 'vitest';
-import { resolveFsObjectPath } from '../server/storage/fs-paths';
+import { getFsObjectMetadataPath, resolveFsObjectPath } from '../server/storage/fs-paths';
 
 describe('fs-paths', () => {
     const ROOT = '/tmp/or3-storage-test';
 
-    it('resolves a valid path', () => {
-        const path = resolveFsObjectPath(ROOT, 'ws1', 'abc123');
-        expect(path).toBe(`${ROOT}/workspaces/ws1/abc123`);
+    it('resolves a sha256 hash path', () => {
+        const hash = `sha256:${'a'.repeat(64)}`;
+        const path = resolveFsObjectPath(ROOT, 'ws1', hash);
+        expect(path).toBe(`${ROOT}/workspaces/ws1/sha256_${'a'.repeat(64)}`);
     });
 
-    it('resolves with hyphens and underscores', () => {
-        const path = resolveFsObjectPath(ROOT, 'my-workspace_1', 'SHA256-hash_v2');
-        expect(path).toBe(`${ROOT}/workspaces/my-workspace_1/SHA256-hash_v2`);
+    it('normalizes legacy md5 hashes to md5_<hex>', () => {
+        const path = resolveFsObjectPath(ROOT, 'ws1', 'A'.repeat(32));
+        expect(path).toBe(`${ROOT}/workspaces/ws1/md5_${'a'.repeat(32)}`);
+    });
+
+    it('resolves metadata sidecar path', () => {
+        const objectPath = `${ROOT}/workspaces/ws1/sha256_${'a'.repeat(64)}`;
+        expect(getFsObjectMetadataPath(objectPath)).toBe(`${objectPath}.meta.json`);
     });
 
     // Traversal attacks
     it('rejects workspace ID with dots', () => {
-        expect(() => resolveFsObjectPath(ROOT, '..', 'abc')).toThrow('Invalid workspace ID');
+        expect(() => resolveFsObjectPath(ROOT, '..', `sha256:${'a'.repeat(64)}`)).toThrow(
+            'Invalid workspace ID',
+        );
     });
 
     it('rejects workspace ID with slashes', () => {
-        expect(() => resolveFsObjectPath(ROOT, 'ws/../etc', 'abc')).toThrow('Invalid workspace ID');
+        expect(() => resolveFsObjectPath(ROOT, 'ws/../etc', `sha256:${'a'.repeat(64)}`)).toThrow(
+            'Invalid workspace ID',
+        );
     });
 
-    it('rejects hash with dots', () => {
-        expect(() => resolveFsObjectPath(ROOT, 'ws1', '../../../etc/passwd')).toThrow('Invalid hash');
+    it('rejects malformed hash', () => {
+        expect(() => resolveFsObjectPath(ROOT, 'ws1', 'sha256:abc')).toThrow('Invalid hash');
     });
 
-    it('rejects hash with slashes', () => {
-        expect(() => resolveFsObjectPath(ROOT, 'ws1', 'foo/bar')).toThrow('Invalid hash');
+    it('rejects unsupported hash algorithm', () => {
+        expect(() => resolveFsObjectPath(ROOT, 'ws1', `sha1:${'a'.repeat(40)}`)).toThrow('Invalid hash');
     });
 
     it('rejects workspace ID with spaces', () => {
-        expect(() => resolveFsObjectPath(ROOT, 'ws 1', 'abc')).toThrow('Invalid workspace ID');
+        expect(() => resolveFsObjectPath(ROOT, 'ws 1', `sha256:${'a'.repeat(64)}`)).toThrow(
+            'Invalid workspace ID',
+        );
     });
 
     it('rejects empty workspace ID', () => {
-        expect(() => resolveFsObjectPath(ROOT, '', 'abc')).toThrow('Invalid workspace ID');
+        expect(() => resolveFsObjectPath(ROOT, '', `sha256:${'a'.repeat(64)}`)).toThrow(
+            'Invalid workspace ID',
+        );
     });
 
     it('rejects empty hash', () => {
@@ -47,7 +61,9 @@ describe('fs-paths', () => {
     });
 
     it('rejects null bytes in workspace ID', () => {
-        expect(() => resolveFsObjectPath(ROOT, 'ws\0x', 'abc')).toThrow('Invalid workspace ID');
+        expect(() => resolveFsObjectPath(ROOT, 'ws\0x', `sha256:${'a'.repeat(64)}`)).toThrow(
+            'Invalid workspace ID',
+        );
     });
 
     it('rejects special characters in hash', () => {

@@ -2,12 +2,27 @@
  * Nitro server plugin — registers the FS storage adapter.
  */
 import { registerStorageGatewayAdapter } from '~~/server/storage/gateway/registry';
+import { validateFsStorageConfig } from '../storage/fs-config';
 import { createFsStorageGatewayAdapter } from '../storage/fs-storage-gateway-adapter';
 
 export default defineNitroPlugin(() => {
     const config = useRuntimeConfig();
-    const authEnabled = config.auth?.enabled ?? config.public?.auth?.enabled;
-    if (!authEnabled) return;
+    const diagnostics = validateFsStorageConfig(config);
+    for (const warning of diagnostics.warnings) {
+        console.warn(`[or3-provider-fs] ${warning}`);
+    }
+
+    if (!diagnostics.config.authEnabled || !diagnostics.config.storageEnabled) return;
+    if (diagnostics.config.providerId !== 'fs') return;
+
+    if (!diagnostics.isValid) {
+        const message = `${diagnostics.errors.join(' ')} Install/configure fs storage provider env values and restart.`;
+        if (diagnostics.config.strict) {
+            throw new Error(message);
+        }
+        console.warn(`[or3-provider-fs] ${message}`);
+        return;
+    }
 
     registerStorageGatewayAdapter({
         id: 'fs',

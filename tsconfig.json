@@ -16,6 +16,8 @@
             "h3": ["../or3-chat/node_modules/h3"],
             "~~/*": ["../or3-chat/*"],
             "~~": ["../or3-chat"],
+            "~~/server/auth/can": ["./src/shims/or3-auth-can.ts"],
+            "~~/server/auth/session": ["./src/shims/or3-auth-session.ts"],
             "~/*": ["../or3-chat/app/*"],
             "~": ["../or3-chat/app"],
             "~/types/*": ["../or3-chat/types/*"],
