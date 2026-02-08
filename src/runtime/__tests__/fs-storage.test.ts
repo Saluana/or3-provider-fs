@@ -7,6 +7,7 @@ import { mkdtemp, rm, readFile, mkdir, writeFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { utimesSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { H3Event } from 'h3';
 import { FsStorageGatewayAdapter } from '../server/storage/fs-storage-gateway-adapter';
 import { signFsToken, verifyFsToken } from '../server/storage/fs-token';
 import { getFsObjectMetadataPath, resolveFsObjectPath } from '../server/storage/fs-paths';
@@ -19,11 +20,11 @@ const requireCanMock = vi.hoisted(() => vi.fn());
 const resolveSessionContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock('~~/server/auth/can', () => ({
-    requireCan: requireCanMock as any,
+    requireCan: requireCanMock as unknown,
 }));
 
 vi.mock('~~/server/auth/session', () => ({
-    resolveSessionContext: resolveSessionContextMock as any,
+    resolveSessionContext: resolveSessionContextMock as unknown,
 }));
 
 let storageRoot: string;
@@ -58,7 +59,7 @@ describe('FsStorageGatewayAdapter', () => {
     });
 
     const adapter = new FsStorageGatewayAdapter();
-    const mockEvent = {} as any;
+    const mockEvent = {} as H3Event;
 
     it('has id "fs"', () => {
         expect(adapter.id).toBe('fs');

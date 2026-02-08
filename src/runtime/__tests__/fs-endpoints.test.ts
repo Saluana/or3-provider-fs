@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { H3Event } from 'h3';
 import downloadHandler from '../server/api/storage/fs/download.get';
 import uploadHandler from '../server/api/storage/fs/upload.put';
 import { resolveFsObjectPath } from '../server/storage/fs-paths';
@@ -13,11 +14,11 @@ const requireCanMock = vi.hoisted(() => vi.fn());
 const resolveSessionContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock('~~/server/auth/can', () => ({
-    requireCan: requireCanMock as any,
+    requireCan: requireCanMock as unknown,
 }));
 
 vi.mock('~~/server/auth/session', () => ({
-    resolveSessionContext: resolveSessionContextMock as any,
+    resolveSessionContext: resolveSessionContextMock as unknown,
 }));
 
 const TEST_SECRET = 'endpoint-test-secret';
@@ -41,7 +42,7 @@ function createMockEvent(input: {
     path: string;
     headers?: Record<string, string>;
     body?: Buffer;
-}): any {
+}): H3Event {
     const requestUrl = `http://localhost${input.path}`;
     const requestHeaders = new Headers(input.headers ?? {});
     const reqWeb = new Request(requestUrl, {
@@ -92,7 +93,7 @@ function createMockEvent(input: {
             req,
             res,
         },
-    };
+    } as unknown as H3Event;
 }
 
 describe('fs upload/download handlers', () => {
@@ -236,7 +237,8 @@ describe('fs upload/download handlers', () => {
 
         const stream = (await downloadHandler(event)) as unknown as NodeJS.ReadableStream;
         await expect(readNodeStream(stream)).resolves.toEqual(payload);
-        expect(event.node.res.getHeader('Content-Type') ?? event.res.headers.get('Content-Type')).toBe('text/plain');
+        const responseHeaders = (event as unknown as { res: { headers: Headers } }).res.headers;
+        expect(responseHeaders.get('Content-Type')).toBe('text/plain');
     });
 
     it('rejects download for token subject mismatch', async () => {

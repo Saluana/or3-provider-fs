@@ -6,11 +6,13 @@
  * workspace, hash, and optional size constraint.
  */
 import { defineEventHandler, getHeader, getQuery, createError } from 'h3';
+import type { H3Event } from 'h3';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, unlink } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { dirname } from 'node:path';
 import { Readable, Transform } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
@@ -33,15 +35,15 @@ function normalizeMime(value: string | undefined): string | undefined {
     return mime || undefined;
 }
 
-function getRequestBodyStream(event: any): Readable | null {
+function getRequestBodyStream(event: H3Event): Readable | null {
     const nodeReq = event?.node?.req;
     if (nodeReq && typeof nodeReq.pipe === 'function') {
         return nodeReq as Readable;
     }
 
-    const webBody = event?.req?.body;
+    const webBody = (event as unknown as { req?: { body?: NodeReadableStream | null } })?.req?.body;
     if (webBody) {
-        return Readable.fromWeb(webBody as any);
+        return Readable.fromWeb(webBody);
     }
 
     return null;

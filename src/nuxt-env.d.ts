@@ -12,7 +12,7 @@ declare global {
     /** Define a Nitro event handler. */
     const defineEventHandler: typeof import('h3')['defineEventHandler'];
     /** Nuxt runtime config composable (auto-imported). */
-    const useRuntimeConfig: () => Record<string, any>;
+    const useRuntimeConfig: () => import('./shims/runtime-config').RuntimeConfigLike;
 }
 
 export {};
