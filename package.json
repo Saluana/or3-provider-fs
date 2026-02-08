@@ -1,11 +1,43 @@
 {
-  "name": "or3-provider-fs",
-  "module": "index.ts",
-  "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+    "name": "or3-provider-fs",
+    "version": "0.0.1",
+    "description": "Filesystem storage provider for OR3 Chat — local-disk blob storage via signed tokens.",
+    "license": "MIT",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/types.d.mts",
+            "import": "./dist/module.mjs"
+        },
+        "./nuxt": {
+            "types": "./dist/types.d.mts",
+            "import": "./dist/module.mjs"
+        }
+    },
+    "main": "./dist/module.mjs",
+    "types": "./dist/types.d.mts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "nuxt-module-build build",
+        "type-check": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "jsonwebtoken": "^9.0.3"
+    },
+    "peerDependencies": {
+        "@nuxt/kit": "^3.0.0 || ^4.0.0",
+        "nuxt": "^3.0.0 || ^4.0.0"
+    },
+    "devDependencies": {
+        "@nuxt/module-builder": "^1.0.2",
+        "@types/jsonwebtoken": "^9.0.10",
+        "@types/node": "^25.2.2",
+        "h3": "^2.0.1",
+        "pathe": "^2.0.3",
+        "typescript": "^5.9.3",
+        "vitest": "^4.0.18"
+    }
 }
