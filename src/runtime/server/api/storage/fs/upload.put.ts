@@ -5,7 +5,7 @@
  * using temp-file + rename. Token is verified for operation scope,
  * workspace, hash, and optional size constraint.
  */
-import { defineEventHandler, getHeader, getQuery, createError } from 'h3';
+import { eventHandler, getHeader, getQuery, createError } from 'h3';
 import type { H3Event } from 'h3';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rename, unlink } from 'node:fs/promises';
@@ -49,7 +49,7 @@ function getRequestBodyStream(event: H3Event): Readable | null {
     return null;
 }
 
-export default defineEventHandler(async (event) => {
+export default eventHandler(async (event) => {
     const token = String(getQuery(event).token || '');
     if (!token) throw createError({ statusCode: 400, statusMessage: 'Missing token' });
 

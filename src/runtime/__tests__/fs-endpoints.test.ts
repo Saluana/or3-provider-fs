@@ -235,10 +235,11 @@ describe('fs upload/download handlers', () => {
             path: `/api/storage/fs/download?token=${encodeURIComponent(token)}`,
         });
 
-        const stream = (await downloadHandler(event)) as unknown as NodeJS.ReadableStream;
+        await downloadHandler(event);
+        const stream = (event as unknown as { node: { res: { _data: NodeJS.ReadableStream } } }).node.res._data;
         await expect(readNodeStream(stream)).resolves.toEqual(payload);
-        const responseHeaders = (event as unknown as { res: { headers: Headers } }).res.headers;
-        expect(responseHeaders.get('Content-Type')).toBe('text/plain');
+        const responseHeaders = (event as unknown as { node: { res: { getHeader(name: string): string | string[] | undefined } } }).node.res;
+        expect(responseHeaders.getHeader('content-type')).toBe('text/plain');
     });
 
     it('rejects download for token subject mismatch', async () => {

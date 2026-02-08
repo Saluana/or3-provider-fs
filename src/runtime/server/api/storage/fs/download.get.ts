@@ -4,7 +4,7 @@
  * Streams a file from the filesystem. Token is verified for
  * operation scope, workspace, and hash.
  */
-import { defineEventHandler, getQuery, createError, sendStream, setResponseHeader } from 'h3';
+import { eventHandler, getQuery, createError, sendStream, setResponseHeader } from 'h3';
 import { createReadStream } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
@@ -13,7 +13,7 @@ import { resolveSessionContext } from '~~/server/auth/session';
 import { verifyFsToken } from '../../../storage/fs-token';
 import { resolveFsObjectPath } from '../../../storage/fs-paths';
 
-export default defineEventHandler(async (event) => {
+export default eventHandler(async (event) => {
     const token = String(getQuery(event).token || '');
     if (!token) throw createError({ statusCode: 400, statusMessage: 'Missing token' });
 
