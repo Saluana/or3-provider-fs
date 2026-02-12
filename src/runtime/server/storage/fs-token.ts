@@ -50,9 +50,13 @@ function assertTokenPayload(
     }
 
     const sizeBytes = candidate.size_bytes;
+    if (candidate.op === 'upload' && sizeBytes === undefined) {
+        throw new Error('Missing size_bytes claim');
+    }
+
     if (
         sizeBytes !== undefined &&
-        (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes < 0 || !Number.isInteger(sizeBytes))
+        (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0 || !Number.isInteger(sizeBytes))
     ) {
         throw new Error('Invalid size_bytes claim');
     }

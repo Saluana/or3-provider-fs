@@ -6,9 +6,8 @@
  */
 import type { H3Event } from 'h3';
 import { createError } from 'h3';
-import type { Dirent } from 'node:fs';
 import { access, mkdir, readdir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type {
     StorageGatewayAdapter,
     PresignUploadRequest,
@@ -18,9 +17,10 @@ import type {
 } from '~~/server/storage/gateway/types';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
+import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
 import { resolveFsUrlTtlSeconds } from './fs-config';
 import { assertValidWorkspaceId, getFsObjectMetadataPath, resolveFsObjectPath, resolveFsWorkspacePath } from './fs-paths';
-import { requireFsHash } from './fs-hash';
+import { parseFsHash, parseFsStorageKey, requireFsHash } from './fs-hash';
 import { signFsToken } from './fs-token';
 
 interface FsGcInput {
@@ -79,6 +79,77 @@ function parseGcInput(input: unknown): { workspaceId: string; retentionSeconds: 
         retentionSeconds: Math.floor(retentionSeconds),
         limit,
     };
+}
+
+async function listWorkspaceFiles(workspacePath: string): Promise<string[]> {
+    const files: string[] = [];
+    const pending = [workspacePath];
+
+    while (pending.length > 0) {
+        const currentPath = pending.pop()!;
+        const entries = await readdir(currentPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const entryPath = join(currentPath, entry.name);
+            if (entry.isDirectory()) {
+                pending.push(entryPath);
+                continue;
+            }
+            if (entry.isFile()) {
+                files.push(entryPath);
+            }
+        }
+    }
+
+    return files;
+}
+
+function isDeletedFlag(value: unknown): boolean {
+    return value === true || value === 1 || value === '1';
+}
+
+function isFileMetaDeleted(payload: unknown): boolean {
+    if (!payload || typeof payload !== 'object') return false;
+    const deleted = (payload as Record<string, unknown>).deleted;
+    return isDeletedFlag(deleted);
+}
+
+async function resolveReferencedStorageKeys(event: H3Event, workspaceId: string): Promise<Set<string>> {
+    const syncAdapter = getActiveSyncGatewayAdapter();
+    if (!syncAdapter) {
+        throw createError({ statusCode: 500, statusMessage: 'Sync adapter not configured' });
+    }
+
+    const referencedStorageKeys = new Set<string>();
+    let cursor = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        const pullResult = await syncAdapter.pull(event, {
+            scope: { workspaceId },
+            cursor,
+            limit: 1000,
+            tables: ['file_meta'],
+        });
+
+        for (const change of pullResult.changes) {
+            if (change.tableName !== 'file_meta') continue;
+            const parsedHash = parseFsHash(change.pk);
+            if (!parsedHash) continue;
+
+            if (change.op === 'delete' || isFileMetaDeleted(change.payload)) {
+                referencedStorageKeys.delete(parsedHash.storageKey);
+                continue;
+            }
+
+            referencedStorageKeys.add(parsedHash.storageKey);
+        }
+
+        cursor = pullResult.nextCursor;
+        hasMore = pullResult.hasMore;
+    }
+
+    return referencedStorageKeys;
 }
 
 export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
@@ -200,6 +271,7 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         const root = getStorageRootOrThrow();
         const cutoffMs = Date.now() - retentionSeconds * 1000;
         const maxDeletes = limit ?? Number.POSITIVE_INFINITY;
+        const referencedStorageKeys = await resolveReferencedStorageKeys(_event, workspaceId);
 
         let deletedCount = 0;
         let workspacePath: string;
@@ -209,43 +281,58 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             throw createError({ statusCode: 400, statusMessage: 'Invalid workspace_id' });
         }
 
-        let entries: Dirent[];
+        let files: string[];
         try {
-            entries = await readdir(workspacePath, { withFileTypes: true });
+            files = await listWorkspaceFiles(workspacePath);
         } catch {
             return { deleted_count: 0 };
         }
 
-        for (const entry of entries) {
+        for (const filePath of files) {
             if (deletedCount >= maxDeletes) break;
-            if (!entry.isFile()) continue;
-
-            const filePath = join(workspacePath, entry.name);
-            const fileStats = await stat(filePath);
+            const fileName = basename(filePath);
+            const fileStats = await stat(filePath).catch(() => null);
+            if (!fileStats) continue;
             if (fileStats.mtimeMs >= cutoffMs) continue;
 
-            if (entry.name.includes('.tmp-')) {
-                await unlink(filePath).catch(() => {});
-                deletedCount += 1;
-                continue;
-            }
-
-            if (entry.name.endsWith('.meta.json')) {
-                const objectPath = filePath.slice(0, -'.meta.json'.length);
-                const objectExists = await fileExists(objectPath);
-                if (!objectExists) {
-                    await unlink(filePath).catch(() => {});
+            if (fileName.includes('.tmp-')) {
+                if (await unlink(filePath).then(() => true).catch(() => false)) {
                     deletedCount += 1;
                 }
                 continue;
             }
 
+            if (fileName.endsWith('.meta.json')) {
+                const objectPath = filePath.slice(0, -'.meta.json'.length);
+                const objectExists = await fileExists(objectPath);
+                if (!objectExists) {
+                    if (await unlink(filePath).then(() => true).catch(() => false)) {
+                        deletedCount += 1;
+                    }
+                }
+                continue;
+            }
+
+            const parsedStorageKey = parseFsStorageKey(fileName);
+            if (!parsedStorageKey) continue;
+
             const metadataPath = getFsObjectMetadataPath(filePath);
             const isCommitted = await fileExists(metadataPath);
             if (!isCommitted) {
-                await unlink(filePath).catch(() => {});
+                if (await unlink(filePath).then(() => true).catch(() => false)) {
+                    deletedCount += 1;
+                }
+                continue;
+            }
+
+            if (referencedStorageKeys.has(parsedStorageKey.storageKey)) {
+                continue;
+            }
+
+            if (await unlink(filePath).then(() => true).catch(() => false)) {
                 deletedCount += 1;
             }
+            await unlink(metadataPath).catch(() => {});
         }
 
         return { deleted_count: deletedCount };

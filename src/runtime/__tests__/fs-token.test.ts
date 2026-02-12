@@ -2,6 +2,7 @@
  * Unit tests for fs-token sign/verify, expiry, and tamper detection.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import jwt from 'jsonwebtoken';
 import { signFsToken, verifyFsToken } from '../server/storage/fs-token';
 
 const TEST_SECRET = 'test-secret-for-unit-tests';
@@ -50,7 +51,10 @@ describe('fs-token', () => {
     });
 
     it('rejects a tampered token', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
+        const token = signFsToken(
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH, size_bytes: 1 },
+            300,
+        );
         const tampered = token.slice(0, -5) + 'XXXXX';
         expect(() => verifyFsToken(tampered)).toThrow();
     });
@@ -72,7 +76,10 @@ describe('fs-token', () => {
     });
 
     it('rejects token signed with wrong secret', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
+        const token = signFsToken(
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH, size_bytes: 1 },
+            300,
+        );
         process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'different-secret';
         expect(() => verifyFsToken(token)).toThrow();
     });
@@ -80,12 +87,15 @@ describe('fs-token', () => {
     it('throws when secret is not configured (sign)', () => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         expect(() =>
-            signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300),
+            signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH, size_bytes: 1 }, 300),
         ).toThrow('Missing OR3_STORAGE_FS_TOKEN_SECRET');
     });
 
     it('throws when secret is not configured (verify)', () => {
-        const token = signFsToken({ op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH }, 300);
+        const token = signFsToken(
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH, size_bytes: 1 },
+            300,
+        );
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         expect(() => verifyFsToken(token)).toThrow('Missing OR3_STORAGE_FS_TOKEN_SECRET');
     });
@@ -106,5 +116,14 @@ describe('fs-token', () => {
             300,
         );
         expect(() => verifyFsToken(token)).toThrow('Invalid hash');
+    });
+
+    it('rejects upload token payloads missing size_bytes', () => {
+        const malformedToken = jwt.sign(
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH },
+            TEST_SECRET,
+            { algorithm: 'HS256', expiresIn: 300 },
+        );
+        expect(() => verifyFsToken(malformedToken)).toThrow('Missing size_bytes claim');
     });
 });

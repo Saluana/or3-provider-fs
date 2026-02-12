@@ -17,14 +17,16 @@ describe('fs-config', () => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
     });
 
-    it('falls back to default TTL when env value is invalid', () => {
+    it('rejects invalid TTL env values', () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = 'not-a-number';
-        expect(resolveFsUrlTtlSeconds()).toBe(900);
+        expect(() => resolveFsUrlTtlSeconds()).toThrow(
+            'OR3_STORAGE_FS_URL_TTL_SECONDS must be an integer between 1 and 86400.',
+        );
     });
 
-    it('falls back to default TTL when env value is out of range', () => {
+    it('rejects out-of-range TTL env values', () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '0';
-        expect(resolveFsUrlTtlSeconds()).toBe(900);
+        expect(() => resolveFsUrlTtlSeconds()).toThrow('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 86400.');
     });
 
     it('accepts valid TTL from env', () => {
@@ -44,5 +46,15 @@ describe('fs-config', () => {
         process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'x'.repeat(32);
         const diagnostics = validateFsStorageConfig(makeRuntimeConfig());
         expect(diagnostics.isValid).toBe(true);
+    });
+
+    it('marks TTL config invalid during startup diagnostics', () => {
+        process.env.OR3_STORAGE_FS_ROOT = '/tmp/or3-storage';
+        process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'x'.repeat(32);
+        process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '-5';
+
+        const diagnostics = validateFsStorageConfig(makeRuntimeConfig());
+        expect(diagnostics.isValid).toBe(false);
+        expect(diagnostics.errors).toContain('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 86400.');
     });
 });

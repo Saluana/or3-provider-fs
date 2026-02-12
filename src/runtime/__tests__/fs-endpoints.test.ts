@@ -9,9 +9,11 @@ import downloadHandler from '../server/api/storage/fs/download.get';
 import uploadHandler from '../server/api/storage/fs/upload.put';
 import { resolveFsObjectPath } from '../server/storage/fs-paths';
 import { signFsToken } from '../server/storage/fs-token';
+import { FsStorageGatewayAdapter } from '../server/storage/fs-storage-gateway-adapter';
 
 const requireCanMock = vi.hoisted(() => vi.fn());
 const resolveSessionContextMock = vi.hoisted(() => vi.fn());
+const getActiveSyncGatewayAdapterMock = vi.hoisted(() => vi.fn());
 
 vi.mock('~~/server/auth/can', () => ({
     requireCan: requireCanMock as unknown,
@@ -19,6 +21,10 @@ vi.mock('~~/server/auth/can', () => ({
 
 vi.mock('~~/server/auth/session', () => ({
     resolveSessionContext: resolveSessionContextMock as unknown,
+}));
+
+vi.mock('~~/server/sync/gateway/registry', () => ({
+    getActiveSyncGatewayAdapter: getActiveSyncGatewayAdapterMock as unknown,
 }));
 
 const TEST_SECRET = 'endpoint-test-secret';
@@ -109,6 +115,13 @@ describe('fs upload/download handlers', () => {
             role: 'owner',
         });
         requireCanMock.mockReset();
+        getActiveSyncGatewayAdapterMock.mockReset().mockReturnValue({
+            pull: vi.fn().mockResolvedValue({
+                changes: [],
+                nextCursor: 0,
+                hasMore: false,
+            }),
+        });
     });
 
     afterEach(async () => {
@@ -116,6 +129,7 @@ describe('fs upload/download handlers', () => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         requireCanMock.mockReset();
         resolveSessionContextMock.mockReset();
+        getActiveSyncGatewayAdapterMock.mockReset();
         await rm(storageRoot, { recursive: true, force: true });
     });
 
@@ -180,6 +194,37 @@ describe('fs upload/download handlers', () => {
             statusCode: 400,
             statusMessage: 'Hash mismatch',
         });
+    });
+
+    it('accepts bare sha256 hash tokens and resolves object path safely', async () => {
+        const payload = Buffer.from('hello bare hash');
+        const bareHash = createHash('sha256').update(payload).digest('hex');
+        const token = signFsToken(
+            {
+                op: 'upload',
+                workspace_id: 'ws1',
+                user_id: 'user-1',
+                hash: bareHash,
+                size_bytes: payload.length,
+                mime_type: 'text/plain',
+            },
+            300,
+        );
+
+        const event = createMockEvent({
+            method: 'PUT',
+            path: `/api/storage/fs/upload?token=${encodeURIComponent(token)}`,
+            headers: { 'content-type': 'text/plain' },
+            body: payload,
+        });
+
+        await expect(uploadHandler(event)).resolves.toEqual({
+            ok: true,
+            storage_id: `ws1:${bareHash}`,
+        });
+
+        const objectPath = resolveFsObjectPath(storageRoot, 'ws1', bareHash);
+        await expect(readFile(objectPath)).resolves.toEqual(payload);
     });
 
     it('rejects upload for token subject mismatch', async () => {
@@ -269,5 +314,86 @@ describe('fs upload/download handlers', () => {
             statusCode: 403,
             statusMessage: 'Invalid token subject',
         });
+    });
+
+    it('runs upload -> integrity -> download -> gc cycle', async () => {
+        const payload = Buffer.from('roundtrip + gc');
+        const hash = makeSha256Hash(payload);
+        const workspaceId = 'ws1';
+        const adapter = new FsStorageGatewayAdapter();
+        const staleTime = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+
+        const uploadToken = signFsToken(
+            {
+                op: 'upload',
+                workspace_id: workspaceId,
+                user_id: 'user-1',
+                hash,
+                size_bytes: payload.length,
+                mime_type: 'text/plain',
+            },
+            300,
+        );
+        await expect(
+            uploadHandler(
+                createMockEvent({
+                    method: 'PUT',
+                    path: `/api/storage/fs/upload?token=${encodeURIComponent(uploadToken)}`,
+                    headers: { 'content-type': 'text/plain' },
+                    body: payload,
+                }),
+            ),
+        ).resolves.toEqual({ ok: true, storage_id: `${workspaceId}:${hash}` });
+
+        await adapter.commit({} as H3Event, {
+            workspace_id: workspaceId,
+            hash,
+        });
+
+        const downloadToken = signFsToken(
+            {
+                op: 'download',
+                workspace_id: workspaceId,
+                user_id: 'user-1',
+                hash,
+                mime_type: 'text/plain',
+            },
+            300,
+        );
+        const downloadEvent = createMockEvent({
+            method: 'GET',
+            path: `/api/storage/fs/download?token=${encodeURIComponent(downloadToken)}`,
+        });
+        await downloadHandler(downloadEvent);
+        const stream = (downloadEvent as unknown as { node: { res: { _data: NodeJS.ReadableStream } } }).node.res._data;
+        await expect(readNodeStream(stream)).resolves.toEqual(payload);
+
+        const objectPath = resolveFsObjectPath(storageRoot, workspaceId, hash);
+        const metadataPath = `${objectPath}.meta.json`;
+        const { utimesSync } = await import('node:fs');
+        utimesSync(objectPath, staleTime, staleTime);
+        utimesSync(metadataPath, staleTime, staleTime);
+
+        getActiveSyncGatewayAdapterMock.mockReturnValueOnce({
+            pull: vi.fn().mockResolvedValue({
+                changes: [
+                    {
+                        tableName: 'file_meta',
+                        pk: hash,
+                        op: 'delete',
+                        payload: undefined,
+                    },
+                ],
+                nextCursor: 1,
+                hasMore: false,
+            }),
+        });
+
+        await expect(
+            adapter.gc({} as H3Event, {
+                workspace_id: workspaceId,
+                retention_seconds: 3600,
+            }),
+        ).resolves.toEqual({ deleted_count: 1 });
     });
 });

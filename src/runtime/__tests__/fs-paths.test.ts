@@ -13,6 +13,12 @@ describe('fs-paths', () => {
         expect(path).toBe(`${ROOT}/workspaces/ws1/sha256_${'a'.repeat(64)}`);
     });
 
+    it('resolves bare sha256 hex path', () => {
+        const hash = 'A'.repeat(64);
+        const path = resolveFsObjectPath(ROOT, 'ws1', hash);
+        expect(path).toBe(`${ROOT}/workspaces/ws1/sha256_${'a'.repeat(64)}`);
+    });
+
     it('normalizes legacy md5 hashes to md5_<hex>', () => {
         const path = resolveFsObjectPath(ROOT, 'ws1', 'A'.repeat(32));
         expect(path).toBe(`${ROOT}/workspaces/ws1/md5_${'a'.repeat(32)}`);

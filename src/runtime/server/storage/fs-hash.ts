@@ -14,7 +14,19 @@ export interface ParsedFsHash {
 
 const SHA256_HASH = /^sha256:([a-f0-9]{64})$/i;
 const MD5_HASH = /^md5:([a-f0-9]{32})$/i;
+const LEGACY_SHA256_HASH = /^([a-f0-9]{64})$/i;
 const LEGACY_MD5_HASH = /^([a-f0-9]{32})$/i;
+const SHA256_STORAGE_KEY = /^sha256_([a-f0-9]{64})$/i;
+const MD5_STORAGE_KEY = /^md5_([a-f0-9]{32})$/i;
+
+function toParsedHash(algorithm: FsHashAlgorithm, hex: string): ParsedFsHash {
+    return {
+        algorithm,
+        hex,
+        canonical: `${algorithm}:${hex}`,
+        storageKey: `${algorithm}_${hex}`,
+    };
+}
 
 export function parseFsHash(hash: string): ParsedFsHash | null {
     const trimmed = hash.trim().toLowerCase();
@@ -22,38 +34,42 @@ export function parseFsHash(hash: string): ParsedFsHash | null {
 
     const shaMatch = trimmed.match(SHA256_HASH);
     if (shaMatch) {
-        const hex = shaMatch[1]!;
-        return {
-            algorithm: 'sha256',
-            hex,
-            canonical: `sha256:${hex}`,
-            storageKey: `sha256_${hex}`,
-        };
+        return toParsedHash('sha256', shaMatch[1]!);
     }
 
     const md5Match = trimmed.match(MD5_HASH);
     if (md5Match) {
-        const hex = md5Match[1]!;
-        return {
-            algorithm: 'md5',
-            hex,
-            canonical: `md5:${hex}`,
-            storageKey: `md5_${hex}`,
-        };
+        return toParsedHash('md5', md5Match[1]!);
+    }
+
+    const legacySha256Match = trimmed.match(LEGACY_SHA256_HASH);
+    if (legacySha256Match) {
+        return toParsedHash('sha256', legacySha256Match[1]!);
     }
 
     const legacyMd5Match = trimmed.match(LEGACY_MD5_HASH);
     if (legacyMd5Match) {
-        const hex = legacyMd5Match[1]!;
-        return {
-            algorithm: 'md5',
-            hex,
-            canonical: `md5:${hex}`,
-            storageKey: `md5_${hex}`,
-        };
+        return toParsedHash('md5', legacyMd5Match[1]!);
     }
 
     return null;
+}
+
+export function parseFsStorageKey(storageKey: string): ParsedFsHash | null {
+    const trimmed = storageKey.trim().toLowerCase();
+    if (!trimmed) return null;
+
+    const shaMatch = trimmed.match(SHA256_STORAGE_KEY);
+    if (shaMatch) {
+        return toParsedHash('sha256', shaMatch[1]!);
+    }
+
+    const md5Match = trimmed.match(MD5_STORAGE_KEY);
+    if (md5Match) {
+        return toParsedHash('md5', md5Match[1]!);
+    }
+
+    return parseFsHash(trimmed);
 }
 
 export function requireFsHash(hash: string): ParsedFsHash {

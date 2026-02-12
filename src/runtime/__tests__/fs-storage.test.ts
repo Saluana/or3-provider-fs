@@ -18,6 +18,7 @@ const HASH_B = `sha256:${'b'.repeat(64)}`;
 
 const requireCanMock = vi.hoisted(() => vi.fn());
 const resolveSessionContextMock = vi.hoisted(() => vi.fn());
+const getActiveSyncGatewayAdapterMock = vi.hoisted(() => vi.fn());
 
 vi.mock('~~/server/auth/can', () => ({
     requireCan: requireCanMock as unknown,
@@ -25,6 +26,10 @@ vi.mock('~~/server/auth/can', () => ({
 
 vi.mock('~~/server/auth/session', () => ({
     resolveSessionContext: resolveSessionContextMock as unknown,
+}));
+
+vi.mock('~~/server/sync/gateway/registry', () => ({
+    getActiveSyncGatewayAdapter: getActiveSyncGatewayAdapterMock as unknown,
 }));
 
 let storageRoot: string;
@@ -48,6 +53,13 @@ describe('FsStorageGatewayAdapter', () => {
             role: 'owner',
         });
         requireCanMock.mockReset();
+        getActiveSyncGatewayAdapterMock.mockReset().mockReturnValue({
+            pull: vi.fn().mockResolvedValue({
+                changes: [],
+                nextCursor: 0,
+                hasMore: false,
+            }),
+        });
     });
 
     afterEach(() => {
@@ -56,6 +68,7 @@ describe('FsStorageGatewayAdapter', () => {
         delete process.env.OR3_STORAGE_FS_URL_TTL_SECONDS;
         requireCanMock.mockReset();
         resolveSessionContextMock.mockReset();
+        getActiveSyncGatewayAdapterMock.mockReset();
     });
 
     const adapter = new FsStorageGatewayAdapter();
@@ -181,6 +194,20 @@ describe('FsStorageGatewayAdapter', () => {
 
             const metadataPath = getFsObjectMetadataPath(target);
             utimesSync(metadataPath, staleTime, staleTime);
+            getActiveSyncGatewayAdapterMock.mockReturnValueOnce({
+                pull: vi.fn().mockResolvedValue({
+                    changes: [
+                        {
+                            tableName: 'file_meta',
+                            pk: hash,
+                            op: 'put',
+                            payload: { deleted: false },
+                        },
+                    ],
+                    nextCursor: 1,
+                    hasMore: false,
+                }),
+            });
 
             const result = await adapter.gc(mockEvent, {
                 workspace_id: workspaceId,
@@ -190,6 +217,44 @@ describe('FsStorageGatewayAdapter', () => {
             expect(result).toEqual({ deleted_count: 0 });
             await expect(stat(target)).resolves.toBeTruthy();
             await expect(stat(metadataPath)).resolves.toBeTruthy();
+        });
+
+        it('deletes committed stale blobs when no file_meta reference exists', async () => {
+            const workspaceId = 'ws1';
+            const hash = HASH_A;
+            const target = resolveFsObjectPath(storageRoot, workspaceId, hash);
+            const staleTime = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, Buffer.from('committed-orphan'));
+            utimesSync(target, staleTime, staleTime);
+
+            await adapter.commit(mockEvent, {
+                workspace_id: workspaceId,
+                hash,
+            });
+
+            const metadataPath = getFsObjectMetadataPath(target);
+            utimesSync(metadataPath, staleTime, staleTime);
+
+            const result = await adapter.gc(mockEvent, {
+                workspace_id: workspaceId,
+                retention_seconds: 3600,
+            });
+
+            expect(result).toEqual({ deleted_count: 2 });
+            await expect(stat(target)).rejects.toThrow();
+            await expect(stat(metadataPath)).rejects.toThrow();
+        });
+
+        it('fails GC when sync adapter is unavailable', async () => {
+            getActiveSyncGatewayAdapterMock.mockReturnValueOnce(null);
+            await expect(
+                adapter.gc(mockEvent, {
+                    workspace_id: 'ws1',
+                    retention_seconds: 3600,
+                }),
+            ).rejects.toMatchObject({ statusCode: 500 });
         });
     });
 });
@@ -240,7 +305,7 @@ describe('Upload / Download flow', () => {
 
     it('rejects upload token for download operation', () => {
         const token = signFsToken(
-            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH_A },
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH_A, size_bytes: 1 },
             300,
         );
         const claims = verifyFsToken(token);
@@ -274,7 +339,7 @@ describe('Upload / Download flow', () => {
 
     it('rejects wrong-secret token', () => {
         const token = signFsToken(
-            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH_A },
+            { op: 'upload', workspace_id: 'ws1', user_id: 'user-1', hash: HASH_A, size_bytes: 1 },
             300,
         );
         process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'wrong-secret';

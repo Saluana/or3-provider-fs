@@ -30,15 +30,20 @@ export function resolveFsUrlTtlSeconds(): number {
     const raw = process.env.OR3_STORAGE_FS_URL_TTL_SECONDS;
     if (!raw) return DEFAULT_URL_TTL_SECONDS;
 
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return DEFAULT_URL_TTL_SECONDS;
-
-    const rounded = Math.floor(parsed);
-    if (rounded < 1 || rounded > MAX_URL_TTL_SECONDS) {
-        return DEFAULT_URL_TTL_SECONDS;
+    const parsed = Number(raw.trim());
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+        throw new Error(
+            `OR3_STORAGE_FS_URL_TTL_SECONDS must be an integer between 1 and ${MAX_URL_TTL_SECONDS}.`
+        );
     }
 
-    return rounded;
+    if (parsed < 1 || parsed > MAX_URL_TTL_SECONDS) {
+        throw new Error(
+            `OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and ${MAX_URL_TTL_SECONDS}.`
+        );
+    }
+
+    return parsed;
 }
 
 export function validateFsStorageConfig(
@@ -51,6 +56,16 @@ export function validateFsStorageConfig(
         | string
         | undefined;
 
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    let urlTtlSeconds = DEFAULT_URL_TTL_SECONDS;
+    try {
+        urlTtlSeconds = resolveFsUrlTtlSeconds();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid OR3_STORAGE_FS_URL_TTL_SECONDS.';
+        errors.push(message);
+    }
+
     const config: FsStorageConfig = {
         authEnabled,
         storageEnabled,
@@ -58,11 +73,8 @@ export function validateFsStorageConfig(
         strict: isStrictMode(runtimeConfig),
         root: process.env.OR3_STORAGE_FS_ROOT,
         tokenSecret: process.env.OR3_STORAGE_FS_TOKEN_SECRET,
-        urlTtlSeconds: resolveFsUrlTtlSeconds(),
+        urlTtlSeconds,
     };
-
-    const errors: string[] = [];
-    const warnings: string[] = [];
 
     if (!authEnabled) {
         warnings.push('auth.enabled=false; fs storage adapter registration skipped.');
@@ -84,15 +96,6 @@ export function validateFsStorageConfig(
         errors.push('Missing OR3_STORAGE_FS_TOKEN_SECRET.');
     } else if (config.tokenSecret.length < 32) {
         warnings.push('OR3_STORAGE_FS_TOKEN_SECRET should be at least 32 characters.');
-    }
-
-    if (String(process.env.OR3_STORAGE_FS_URL_TTL_SECONDS ?? '').trim()) {
-        const rawTtl = Number(process.env.OR3_STORAGE_FS_URL_TTL_SECONDS);
-        if (!Number.isFinite(rawTtl) || rawTtl < 1 || rawTtl > MAX_URL_TTL_SECONDS) {
-            warnings.push(
-                `OR3_STORAGE_FS_URL_TTL_SECONDS is invalid; using default ${DEFAULT_URL_TTL_SECONDS}s.`
-            );
-        }
     }
 
     return {

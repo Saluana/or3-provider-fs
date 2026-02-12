@@ -17,11 +17,7 @@ export default defineNitroPlugin(() => {
 
     if (!diagnostics.isValid) {
         const message = `${diagnostics.errors.join(' ')} Install/configure fs storage provider env values and restart.`;
-        if (diagnostics.config.strict) {
-            throw new Error(message);
-        }
-        console.warn(`[or3-provider-fs] ${message}`);
-        return;
+        throw new Error(message);
     }
 
     registerStorageGatewayAdapter({
