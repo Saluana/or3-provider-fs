@@ -2,8 +2,10 @@
  * Nitro server plugin — registers the FS storage adapter.
  */
 import { registerStorageGatewayAdapter } from '~~/server/storage/gateway/registry';
+import { registerProviderAdminAdapter } from '~~/server/admin/providers/registry';
 import { validateFsStorageConfig } from '../storage/fs-config';
 import { createFsStorageGatewayAdapter } from '../storage/fs-storage-gateway-adapter';
+import { fsStorageAdminAdapter } from '../admin/adapters/storage-fs';
 
 export default defineNitroPlugin(() => {
     const config = useRuntimeConfig();
@@ -25,4 +27,6 @@ export default defineNitroPlugin(() => {
         order: 100,
         create: createFsStorageGatewayAdapter,
     });
+
+    registerProviderAdminAdapter(fsStorageAdminAdapter);
 });
