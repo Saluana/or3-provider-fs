@@ -6,8 +6,8 @@
  */
 import type { H3Event } from 'h3';
 import { createError } from 'h3';
-import { access, mkdir, readdir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { access, mkdir, opendir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type {
     StorageGatewayAdapter,
     PresignUploadRequest,
@@ -15,12 +15,18 @@ import type {
     PresignDownloadRequest,
     PresignDownloadResponse,
 } from '~~/server/storage/gateway/types';
+import type { CanonicalStorageQueryKind } from '~~/server/sync/gateway/types';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
 import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
 import { resolveFsUrlTtlSeconds } from './fs-config';
-import { assertValidWorkspaceId, getFsObjectMetadataPath, resolveFsObjectPath, resolveFsWorkspacePath } from './fs-paths';
-import { parseFsHash, parseFsStorageKey, requireFsHash } from './fs-hash';
+import {
+    assertValidWorkspaceId,
+    getFsObjectMetadataPath,
+    resolveFsObjectPath,
+    resolveFsWorkspacePath,
+} from './fs-paths';
+import { parseFsStorageKey, requireFsHash } from './fs-hash';
 import { signFsToken } from './fs-token';
 
 interface FsGcInput {
@@ -35,15 +41,6 @@ function getStorageRootOrThrow(): string {
         throw createError({ statusCode: 500, statusMessage: 'Storage root not configured' });
     }
     return root;
-}
-
-async function fileExists(path: string): Promise<boolean> {
-    try {
-        await access(path, constants.F_OK);
-        return true;
-    } catch {
-        return false;
-    }
 }
 
 function parseGcInput(input: unknown): { workspaceId: string; retentionSeconds: number; limit: number | undefined } {
@@ -79,77 +76,6 @@ function parseGcInput(input: unknown): { workspaceId: string; retentionSeconds: 
         retentionSeconds: Math.floor(retentionSeconds),
         limit,
     };
-}
-
-async function listWorkspaceFiles(workspacePath: string): Promise<string[]> {
-    const files: string[] = [];
-    const pending = [workspacePath];
-
-    while (pending.length > 0) {
-        const currentPath = pending.pop()!;
-        const entries = await readdir(currentPath, { withFileTypes: true });
-
-        for (const entry of entries) {
-            const entryPath = join(currentPath, entry.name);
-            if (entry.isDirectory()) {
-                pending.push(entryPath);
-                continue;
-            }
-            if (entry.isFile()) {
-                files.push(entryPath);
-            }
-        }
-    }
-
-    return files;
-}
-
-function isDeletedFlag(value: unknown): boolean {
-    return value === true || value === 1 || value === '1';
-}
-
-function isFileMetaDeleted(payload: unknown): boolean {
-    if (!payload || typeof payload !== 'object') return false;
-    const deleted = (payload as Record<string, unknown>).deleted;
-    return isDeletedFlag(deleted);
-}
-
-async function resolveReferencedStorageKeys(event: H3Event, workspaceId: string): Promise<Set<string>> {
-    const syncAdapter = getActiveSyncGatewayAdapter();
-    if (!syncAdapter) {
-        throw createError({ statusCode: 500, statusMessage: 'Sync adapter not configured' });
-    }
-
-    const referencedStorageKeys = new Set<string>();
-    let cursor = 0;
-    let hasMore = true;
-
-    while (hasMore) {
-        const pullResult = await syncAdapter.pull(event, {
-            scope: { workspaceId },
-            cursor,
-            limit: 1000,
-            tables: ['file_meta'],
-        });
-
-        for (const change of pullResult.changes) {
-            if (change.tableName !== 'file_meta') continue;
-            const parsedHash = parseFsHash(change.pk);
-            if (!parsedHash) continue;
-
-            if (change.op === 'delete' || isFileMetaDeleted(change.payload)) {
-                referencedStorageKeys.delete(parsedHash.storageKey);
-                continue;
-            }
-
-            referencedStorageKeys.add(parsedHash.storageKey);
-        }
-
-        cursor = pullResult.nextCursor;
-        hasMore = pullResult.hasMore;
-    }
-
-    return referencedStorageKeys;
 }
 
 export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
@@ -266,76 +192,119 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         await rename(tempMetadataPath, metadataPath);
     }
 
-    async gc(_event: H3Event, input: unknown): Promise<{ deleted_count: number }> {
-        const { workspaceId, retentionSeconds, limit } = parseGcInput(input);
+    async gc(
+        event: H3Event,
+        input: unknown,
+    ): Promise<{
+        deleted_count: number;
+        scanned_count?: number;
+        status: 'completed' | 'disabled';
+        reason?: 'canonical_reference_state_required';
+    }> {
+        const { workspaceId, retentionSeconds, limit = 100 } = parseGcInput(input);
+        const sync = getActiveSyncGatewayAdapter();
+        if (!sync?.queryCanonicalStorage) {
+            return {
+                deleted_count: 0,
+                status: 'disabled',
+                reason: 'canonical_reference_state_required',
+            };
+        }
+
+        const hasCanonicalRecord = async (
+            kind: Extract<CanonicalStorageQueryKind, 'live_metadata' | 'reference_edges'>,
+            hash: string,
+        ): Promise<boolean> => {
+            let cursor: string | undefined;
+            do {
+                const page = await sync.queryCanonicalStorage!(event, {
+                    scope: { workspaceId },
+                    kind,
+                    hash,
+                    cursor,
+                    limit: 100,
+                });
+                if (page.items.length > 0) return true;
+                if (page.hasMore && !page.nextCursor) {
+                    throw createError({
+                        statusCode: 502,
+                        statusMessage: 'Canonical storage provider returned an invalid page',
+                    });
+                }
+                cursor = page.nextCursor;
+            } while (cursor);
+            return false;
+        };
+
         const root = getStorageRootOrThrow();
+        const workspacePath = resolveFsWorkspacePath(root, workspaceId);
         const cutoffMs = Date.now() - retentionSeconds * 1000;
-        const maxDeletes = limit ?? Number.POSITIVE_INFINITY;
-        const referencedStorageKeys = await resolveReferencedStorageKeys(_event, workspaceId);
+        const candidates: Array<{ hash: string; objectPath: string; metadataPath: string }> = [];
+        const scanLimit = Math.min(500, Math.max(limit, limit * 4));
+        let scannedCount = 0;
+
+        let directory;
+        try {
+            directory = await opendir(workspacePath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+                return { deleted_count: 0, scanned_count: 0, status: 'completed' };
+            }
+            throw error;
+        }
+
+        try {
+            for await (const entry of directory) {
+                if (!entry.isFile() || entry.name.endsWith('.meta.json')) continue;
+                const parsed = parseFsStorageKey(entry.name);
+                if (!parsed) continue;
+                scannedCount += 1;
+                const objectPath = resolveFsObjectPath(root, workspaceId, parsed.canonical);
+                const info = await stat(objectPath);
+                if (info.mtimeMs <= cutoffMs) {
+                    candidates.push({
+                        hash: parsed.canonical,
+                        objectPath,
+                        metadataPath: getFsObjectMetadataPath(objectPath),
+                    });
+                }
+                if (candidates.length >= Math.min(limit, 500) || scannedCount >= scanLimit) break;
+            }
+        } finally {
+            await directory.close().catch(() => undefined);
+        }
+
+        // Resolve every candidate before issuing the first delete. If the
+        // canonical backend is unavailable, this run makes no destructive change.
+        const unreferenced: typeof candidates = [];
+        for (const candidate of candidates) {
+            const hasMetadata = await hasCanonicalRecord('live_metadata', candidate.hash);
+            const hasReference = hasMetadata
+                ? true
+                : await hasCanonicalRecord('reference_edges', candidate.hash);
+            if (!hasMetadata && !hasReference) unreferenced.push(candidate);
+        }
 
         let deletedCount = 0;
-        let workspacePath: string;
-        try {
-            workspacePath = resolveFsWorkspacePath(root, workspaceId);
-        } catch {
-            throw createError({ statusCode: 400, statusMessage: 'Invalid workspace_id' });
+        for (const candidate of unreferenced) {
+            // Recheck immediately before deletion so a reference created during
+            // the initial scan wins over collection.
+            if (await hasCanonicalRecord('live_metadata', candidate.hash)) continue;
+            if (await hasCanonicalRecord('reference_edges', candidate.hash)) continue;
+            await unlink(candidate.objectPath).catch((error: NodeJS.ErrnoException) => {
+                if (error.code !== 'ENOENT') throw error;
+            });
+            await unlink(candidate.metadataPath).catch((error: NodeJS.ErrnoException) => {
+                if (error.code !== 'ENOENT') throw error;
+            });
+            deletedCount += 1;
         }
 
-        let files: string[];
-        try {
-            files = await listWorkspaceFiles(workspacePath);
-        } catch {
-            return { deleted_count: 0 };
-        }
-
-        for (const filePath of files) {
-            if (deletedCount >= maxDeletes) break;
-            const fileName = basename(filePath);
-            const fileStats = await stat(filePath).catch(() => null);
-            if (!fileStats) continue;
-            if (fileStats.mtimeMs >= cutoffMs) continue;
-
-            if (fileName.includes('.tmp-')) {
-                if (await unlink(filePath).then(() => true).catch(() => false)) {
-                    deletedCount += 1;
-                }
-                continue;
-            }
-
-            if (fileName.endsWith('.meta.json')) {
-                const objectPath = filePath.slice(0, -'.meta.json'.length);
-                const objectExists = await fileExists(objectPath);
-                if (!objectExists) {
-                    if (await unlink(filePath).then(() => true).catch(() => false)) {
-                        deletedCount += 1;
-                    }
-                }
-                continue;
-            }
-
-            const parsedStorageKey = parseFsStorageKey(fileName);
-            if (!parsedStorageKey) continue;
-
-            const metadataPath = getFsObjectMetadataPath(filePath);
-            const isCommitted = await fileExists(metadataPath);
-            if (!isCommitted) {
-                if (await unlink(filePath).then(() => true).catch(() => false)) {
-                    deletedCount += 1;
-                }
-                continue;
-            }
-
-            if (referencedStorageKeys.has(parsedStorageKey.storageKey)) {
-                continue;
-            }
-
-            if (await unlink(filePath).then(() => true).catch(() => false)) {
-                deletedCount += 1;
-            }
-            await unlink(metadataPath).catch(() => {});
-        }
-
-        return { deleted_count: deletedCount };
+        return {
+            deleted_count: deletedCount,
+            scanned_count: scannedCount,
+            status: 'completed',
+        };
     }
 }
 

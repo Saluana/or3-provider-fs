@@ -316,7 +316,7 @@ describe('fs upload/download handlers', () => {
         });
     });
 
-    it('runs upload -> integrity -> download -> gc cycle', async () => {
+    it('runs upload -> integrity -> download and reports destructive GC disabled', async () => {
         const payload = Buffer.from('roundtrip + gc');
         const hash = makeSha256Hash(payload);
         const workspaceId = 'ws1';
@@ -394,6 +394,13 @@ describe('fs upload/download handlers', () => {
                 workspace_id: workspaceId,
                 retention_seconds: 3600,
             }),
-        ).resolves.toEqual({ deleted_count: 1 });
+        ).resolves.toEqual({
+            deleted_count: 0,
+            status: 'disabled',
+            reason: 'canonical_reference_state_required',
+        });
+        await expect(readFile(objectPath)).resolves.toEqual(payload);
+        await expect(readFile(metadataPath)).resolves.toBeTruthy();
+        expect(getActiveSyncGatewayAdapterMock).toHaveBeenCalledOnce();
     });
 });

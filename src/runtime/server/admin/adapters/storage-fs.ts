@@ -8,6 +8,7 @@ import type {
 } from '~~/server/admin/providers/types';
 import { createFsStorageGatewayAdapter } from '../../storage/fs-storage-gateway-adapter';
 import { validateFsStorageConfig } from '../../storage/fs-config';
+import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
 
 const FS_PROVIDER_ID = 'fs';
 const DEFAULT_RETENTION_SECONDS = 30 * 24 * 3600;
@@ -42,21 +43,35 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
         for (const message of diagnostics.errors) {
             warnings.push({ level: 'error', message });
         }
+        const canonicalQueriesAvailable = Boolean(
+            getActiveSyncGatewayAdapter()?.queryCanonicalStorage
+        );
+        if (!canonicalQueriesAvailable) {
+            warnings.push({
+                level: 'warning',
+                message:
+                    'Destructive filesystem blob GC is disabled until canonical reference state is available.',
+            });
+        }
 
         return {
             details: {
                 root: diagnostics.config.root,
                 tokenSecretConfigured: Boolean(diagnostics.config.tokenSecret),
                 urlTtlSeconds: diagnostics.config.urlTtlSeconds,
+                gcStatus: canonicalQueriesAvailable ? 'available' : 'disabled',
+                ...(canonicalQueriesAvailable
+                    ? {}
+                    : { gcDisabledReason: 'canonical_reference_state_required' }),
             },
             warnings,
             actions: [
                 {
                     id: 'storage.gc',
-                    label: 'Run Storage GC',
-                    description:
-                        'Delete orphaned filesystem blobs and stale metadata after the retention window.',
-                    danger: true,
+                    label: canonicalQueriesAvailable ? 'Run Storage GC' : 'Check Storage GC Status',
+                    description: canonicalQueriesAvailable
+                        ? 'Deletes retained blobs only after canonical metadata and reference checks.'
+                        : 'Reports that destructive GC is disabled; does not scan sync history or delete files.',
                 },
             ],
         };

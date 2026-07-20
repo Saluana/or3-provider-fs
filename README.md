@@ -31,7 +31,7 @@ export default defineNuxtConfig({
 |---|---|---|---|
 | `OR3_STORAGE_FS_ROOT` | **Yes** | — | Absolute path to the storage root directory |
 | `OR3_STORAGE_FS_TOKEN_SECRET` | **Yes** | — | HMAC secret for signing presign tokens (≥32 chars recommended) |
-| `OR3_STORAGE_FS_URL_TTL_SECONDS` | No | `900` | Token / presigned URL lifetime in seconds |
+| `OR3_STORAGE_FS_URL_TTL_SECONDS` | No | `900` | Token / presigned URL lifetime in seconds (maximum 3600) |
 | `OR3_STRICT_CONFIG` | No | `false` (`true` in production) | Fail startup when required fs provider config is missing |
 
 ## How It Works
@@ -62,13 +62,13 @@ $OR3_STORAGE_FS_ROOT/
   workspaces/
     <workspaceId>/
       sha256_<hex>      ← content-addressed blob
-      sha256_<hex>.meta.json  ← commit sidecar used by GC
+      sha256_<hex>.meta.json  ← upload commit sidecar
 ```
 
 ### Security
 
 - **Path traversal prevention**: workspace IDs are validated against `[a-zA-Z0-9_-]+`; hashes must be canonical `sha256:<hex>` or `md5:<hex>` forms and are normalized to safe file keys.
-- **Short-lived tokens**: presigned URLs expire after `OR3_STORAGE_FS_URL_TTL_SECONDS` (default 15 min).
+- **Short-lived tokens**: presigned URLs expire after `OR3_STORAGE_FS_URL_TTL_SECONDS` (default 15 min, maximum 1 hour).
 - **Operation scope**: upload tokens can't be used for download and vice versa.
 - **User scope**: upload/download tokens are bound to the authenticated user and workspace checks.
 - **Atomic writes**: files are written to a temp path first, then renamed to prevent partial-upload corruption.
@@ -81,7 +81,16 @@ The storage root is a plain directory tree. Back it up with any tool:
 rsync -a "$OR3_STORAGE_FS_ROOT" /backup/or3-storage/
 ```
 
-Committed blobs create `.meta.json` sidecars. Include those files in backups so GC does not treat committed blobs as orphans.
+Committed blobs create `.meta.json` sidecars. Include those files in backups.
+
+## Garbage Collection Safety
+
+Filesystem blob GC uses bounded canonical queries against materialized `file_meta`
+and live message/post reference edges, then rechecks immediately before deleting a
+retained blob and its sidecar. It never reconstructs liveness from sync history.
+When the active sync provider does not expose canonical storage queries, GC fails
+closed with `{ deleted_count: 0, status: "disabled", reason:
+"canonical_reference_state_required" }` and deletes nothing.
 
 ## Development
 

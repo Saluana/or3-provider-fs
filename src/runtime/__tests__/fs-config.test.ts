@@ -20,18 +20,25 @@ describe('fs-config', () => {
     it('rejects invalid TTL env values', () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = 'not-a-number';
         expect(() => resolveFsUrlTtlSeconds()).toThrow(
-            'OR3_STORAGE_FS_URL_TTL_SECONDS must be an integer between 1 and 86400.',
+            'OR3_STORAGE_FS_URL_TTL_SECONDS must be an integer between 1 and 3600.',
         );
     });
 
     it('rejects out-of-range TTL env values', () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '0';
-        expect(() => resolveFsUrlTtlSeconds()).toThrow('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 86400.');
+        expect(() => resolveFsUrlTtlSeconds()).toThrow('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 3600.');
     });
 
     it('accepts valid TTL from env', () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '120';
         expect(resolveFsUrlTtlSeconds()).toBe(120);
+    });
+
+    it('rejects URL lifetimes longer than one hour', () => {
+        process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '3601';
+        expect(() => resolveFsUrlTtlSeconds()).toThrow(
+            'OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 3600.'
+        );
     });
 
     it('validates required env vars', () => {
@@ -55,6 +62,6 @@ describe('fs-config', () => {
 
         const diagnostics = validateFsStorageConfig(makeRuntimeConfig());
         expect(diagnostics.isValid).toBe(false);
-        expect(diagnostics.errors).toContain('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 86400.');
+        expect(diagnostics.errors).toContain('OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 3600.');
     });
 });

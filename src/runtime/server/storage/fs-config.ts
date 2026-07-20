@@ -18,7 +18,7 @@ export interface FsStorageConfigDiagnostics {
 }
 
 const DEFAULT_URL_TTL_SECONDS = 900;
-const MAX_URL_TTL_SECONDS = 24 * 60 * 60;
+const MAX_URL_TTL_SECONDS = 60 * 60;
 
 function isStrictMode(runtimeConfig: ReturnType<typeof useRuntimeConfig>): boolean {
     if (process.env.OR3_STRICT_CONFIG === 'true') return true;

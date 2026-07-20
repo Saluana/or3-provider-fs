@@ -48,7 +48,7 @@ describe('fs register plugin', () => {
     it('fails startup on invalid URL TTL', async () => {
         process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '0';
         await expect(import('../register')).rejects.toThrow(
-            'OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 86400.',
+            'OR3_STORAGE_FS_URL_TTL_SECONDS must be between 1 and 3600.',
         );
         expect(registerStorageGatewayAdapterMock).not.toHaveBeenCalled();
     });
