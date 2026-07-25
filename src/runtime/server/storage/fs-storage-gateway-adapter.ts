@@ -139,6 +139,7 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
                 workspace_id: input.workspaceId,
                 user_id: session.user.id,
                 hash: input.hash,
+                ...(input.mimeType ? { mime_type: input.mimeType } : {}),
             },
             ttl,
         );

@@ -59,6 +59,9 @@ export default eventHandler(async (event) => {
 
     if (claims.mime_type) {
         setResponseHeader(event, 'Content-Type', claims.mime_type);
+    } else {
+        // Prefer an explicit type from the token; fall back so clients can still stream.
+        setResponseHeader(event, 'Content-Type', 'application/octet-stream');
     }
 
     return sendStream(event, createReadStream(filePath));
