@@ -14,6 +14,7 @@ import type {
     PresignUploadResponse,
     PresignDownloadRequest,
     PresignDownloadResponse,
+    DeleteObjectRequest,
 } from '~~/server/storage/gateway/types';
 import type { CanonicalStorageQueryKind } from '~~/server/sync/gateway/types';
 import { requireCan } from '~~/server/auth/can';
@@ -191,6 +192,28 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         await mkdir(dirname(metadataPath), { recursive: true });
         await writeFile(tempMetadataPath, metadata, { encoding: 'utf8' });
         await rename(tempMetadataPath, metadataPath);
+    }
+
+    async deleteObject(_event: H3Event, input: DeleteObjectRequest): Promise<void> {
+        requireFsHash(input.hash);
+        const expectedStorageId = `${input.workspaceId}:${input.hash}`;
+        if (input.storageId !== undefined && input.storageId !== expectedStorageId) {
+            throw createError({
+                statusCode: 400,
+                statusMessage: 'storage_id does not match expected filesystem object',
+            });
+        }
+
+        const objectPath = resolveFsObjectPath(
+            getStorageRootOrThrow(),
+            input.workspaceId,
+            input.hash,
+        );
+        for (const path of [objectPath, getFsObjectMetadataPath(objectPath)]) {
+            await unlink(path).catch((error: NodeJS.ErrnoException) => {
+                if (error.code !== 'ENOENT') throw error;
+            });
+        }
     }
 
     async gc(

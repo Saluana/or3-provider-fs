@@ -160,6 +160,40 @@ describe('FsStorageGatewayAdapter', () => {
         });
     });
 
+    describe('deleteObject', () => {
+        it('deletes the blob and marker and succeeds when repeated', async () => {
+            const workspaceId = 'ws-delete-idempotent';
+            const target = resolveFsObjectPath(storageRoot, workspaceId, HASH_A);
+            const marker = getFsObjectMetadataPath(target);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'blob');
+            await writeFile(marker, '{}');
+
+            const input = {
+                workspaceId,
+                hash: HASH_A,
+                storageId: `${workspaceId}:${HASH_A}`,
+            };
+            await expect(adapter.deleteObject(mockEvent, input)).resolves.toBeUndefined();
+            await expect(adapter.deleteObject(mockEvent, input)).resolves.toBeUndefined();
+            await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+            await expect(stat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+        });
+
+        it('rejects a storage id from another workspace without deleting either object', async () => {
+            const target = resolveFsObjectPath(storageRoot, 'ws-delete-a', HASH_B);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'keep');
+
+            await expect(adapter.deleteObject(mockEvent, {
+                workspaceId: 'ws-delete-a',
+                hash: HASH_B,
+                storageId: `ws-delete-b:${HASH_B}`,
+            })).rejects.toMatchObject({ statusCode: 400 });
+            await expect(readFile(target, 'utf8')).resolves.toBe('keep');
+        });
+    });
+
     describe('gc', () => {
         it('executes the shared canonical liveness adapter contract', async () => {
             const workspaceId = 'ws-shared-liveness';
