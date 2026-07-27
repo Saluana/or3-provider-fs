@@ -1,6 +1,6 @@
 {
     "name": "or3-provider-fs",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "Filesystem storage provider for OR3 Chat — local-disk blob storage via signed tokens.",
     "license": "MIT",
     "type": "module",
