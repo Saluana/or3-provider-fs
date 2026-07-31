@@ -1,6 +1,10 @@
 {
     "name": "or3-provider-fs",
-    "version": "0.0.2",
+    "version": "0.0.3",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Saluana/or3-provider-fs.git"
+    },
     "description": "Filesystem storage provider for OR3 Chat — local-disk blob storage via signed tokens.",
     "license": "MIT",
     "type": "module",
