@@ -1,6 +1,7 @@
 /**
  * Nitro server plugin — registers the FS storage adapter.
  */
+import { useRuntimeConfig } from '#imports';
 import { defineNitroPlugin } from 'nitropack/runtime/plugin';
 import { registerStorageGatewayAdapter } from '~~/server/storage/gateway/registry';
 import { registerProviderAdminAdapter } from '~~/server/admin/providers/registry';
