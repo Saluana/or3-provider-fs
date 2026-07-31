@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const registerStorageGatewayAdapterMock = vi.hoisted(() => vi.fn());
 
+vi.mock('nitropack/runtime/plugin', () => ({
+    defineNitroPlugin: (plugin: () => unknown) => plugin(),
+}));
+
 vi.mock('~~/server/storage/gateway/registry', () => ({
     registerStorageGatewayAdapter: registerStorageGatewayAdapterMock as unknown,
 }));
@@ -15,8 +19,6 @@ describe('fs register plugin', () => {
         process.env.OR3_STORAGE_FS_TOKEN_SECRET = 'x'.repeat(32);
         delete process.env.OR3_STORAGE_FS_URL_TTL_SECONDS;
 
-        (globalThis as typeof globalThis & { defineNitroPlugin?: unknown }).defineNitroPlugin =
-            (plugin: () => unknown) => plugin();
         (globalThis as typeof globalThis & { useRuntimeConfig?: unknown }).useRuntimeConfig = () => ({
             auth: { enabled: true, strict: false },
             storage: { enabled: true, provider: 'fs' },
