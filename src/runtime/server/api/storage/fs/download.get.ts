@@ -5,13 +5,11 @@
  * operation scope, workspace, and hash.
  */
 import { eventHandler, getQuery, createError, sendStream, setResponseHeader } from 'h3';
-import { createReadStream } from 'node:fs';
-import { access, constants } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
 import { verifyFsToken } from '../../../storage/fs-token';
-import { resolveFsObjectPath } from '../../../storage/fs-paths';
+import { openFsObjectForDownload, resolveFsObjectPath } from '../../../storage/fs-paths';
 
 export default eventHandler(async (event) => {
     const token = String(getQuery(event).token || '');
@@ -51,8 +49,9 @@ export default eventHandler(async (event) => {
         throw createError({ statusCode: 400, statusMessage: 'Invalid path parameters' });
     }
 
+    let fileHandle;
     try {
-        await access(filePath, constants.R_OK);
+        fileHandle = await openFsObjectForDownload(root, filePath);
     } catch {
         throw createError({ statusCode: 404, statusMessage: 'File not found' });
     }
@@ -64,5 +63,5 @@ export default eventHandler(async (event) => {
         setResponseHeader(event, 'Content-Type', 'application/octet-stream');
     }
 
-    return sendStream(event, createReadStream(filePath));
+    return sendStream(event, fileHandle.createReadStream());
 });

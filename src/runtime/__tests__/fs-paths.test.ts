@@ -2,7 +2,10 @@
  * Unit tests for fs-paths safe path resolution and traversal prevention.
  */
 import { describe, it, expect } from 'vitest';
-import { getFsObjectMetadataPath, resolveFsObjectPath } from '../server/storage/fs-paths';
+import { getFsObjectMetadataPath, openFsObjectForDownload, resolveFsObjectPath } from '../server/storage/fs-paths';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 describe('fs-paths', () => {
     const ROOT = '/tmp/or3-storage-test';
@@ -74,5 +77,46 @@ describe('fs-paths', () => {
 
     it('rejects special characters in hash', () => {
         expect(() => resolveFsObjectPath(ROOT, 'ws1', 'abc;rm -rf')).toThrow('Invalid hash');
+    });
+
+    it('rejects a pre-existing symlink that escapes the storage root', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'or3-fs-symlink-root-'));
+        const outside = await mkdtemp(join(tmpdir(), 'or3-fs-symlink-outside-'));
+        const hash = `sha256:${'b'.repeat(64)}`;
+        const objectPath = resolveFsObjectPath(root, 'ws1', hash);
+        const outsidePath = join(outside, 'secret.txt');
+
+        try {
+            await mkdir(dirname(objectPath), { recursive: true });
+            await writeFile(outsidePath, 'outside-secret');
+            await symlink(outsidePath, objectPath);
+
+            await expect(openFsObjectForDownload(root, objectPath)).rejects.toBeDefined();
+        } finally {
+            await rm(root, { recursive: true, force: true });
+            await rm(outside, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects a path swapped to an escaping symlink before open', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'or3-fs-swap-root-'));
+        const outside = await mkdtemp(join(tmpdir(), 'or3-fs-swap-outside-'));
+        const hash = `sha256:${'c'.repeat(64)}`;
+        const objectPath = resolveFsObjectPath(root, 'ws1', hash);
+        const outsidePath = join(outside, 'secret.txt');
+
+        try {
+            await mkdir(dirname(objectPath), { recursive: true });
+            await writeFile(outsidePath, 'outside-secret');
+            await writeFile(objectPath, 'safe-placeholder');
+            await rm(objectPath);
+            await symlink(outsidePath, objectPath);
+
+            await expect(openFsObjectForDownload(root, objectPath)).rejects.toBeDefined();
+            await expect(readFile(outsidePath, 'utf8')).resolves.toBe('outside-secret');
+        } finally {
+            await rm(root, { recursive: true, force: true });
+            await rm(outside, { recursive: true, force: true });
+        }
     });
 });

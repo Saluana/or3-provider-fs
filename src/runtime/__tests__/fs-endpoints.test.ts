@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -314,6 +314,41 @@ describe('fs upload/download handlers', () => {
             statusCode: 403,
             statusMessage: 'Invalid token subject',
         });
+    });
+
+    it('rejects a signed download when the object is an escaping symlink', async () => {
+        const payload = Buffer.from('outside-secret');
+        const hash = makeSha256Hash(payload);
+        const objectPath = resolveFsObjectPath(storageRoot, 'ws1', hash);
+        const outsideRoot = await mkdtemp(join(tmpdir(), 'or3-fs-endpoint-outside-'));
+        const outsidePath = join(outsideRoot, 'secret.txt');
+        await mkdir(dirname(objectPath), { recursive: true });
+        await writeFile(outsidePath, payload);
+        await symlink(outsidePath, objectPath);
+
+        const token = signFsToken(
+            {
+                op: 'download',
+                workspace_id: 'ws1',
+                user_id: 'user-1',
+                hash,
+                mime_type: 'text/plain',
+            },
+            300,
+        );
+        const event = createMockEvent({
+            method: 'GET',
+            path: `/api/storage/fs/download?token=${encodeURIComponent(token)}`,
+        });
+
+        try {
+            await expect(downloadHandler(event)).rejects.toMatchObject({
+                statusCode: 404,
+                statusMessage: 'File not found',
+            });
+        } finally {
+            await rm(outsideRoot, { recursive: true, force: true });
+        }
     });
 
     it('runs upload -> integrity -> download and reports destructive GC disabled', async () => {
