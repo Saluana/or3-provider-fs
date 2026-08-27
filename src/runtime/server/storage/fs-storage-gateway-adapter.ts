@@ -122,7 +122,7 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         event: H3Event,
         input: PresignDownloadRequest,
     ): Promise<PresignDownloadResponse> {
-        requireFsHash(input.hash);
+        const parsedHash = requireFsHash(input.hash);
 
         const session = await resolveSessionContext(event);
         if (!session.authenticated || !session.user) {
@@ -133,13 +133,28 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             id: input.workspaceId,
         });
 
+        const root = getStorageRootOrThrow();
+        let objectPath: string;
+        try {
+            objectPath = resolveFsObjectPath(root, input.workspaceId, parsedHash.canonical);
+        } catch {
+            throw createError({ statusCode: 404, statusMessage: 'File not found' });
+        }
+        try {
+            await access(objectPath, constants.F_OK);
+            await access(getFsObjectMetadataPath(objectPath), constants.F_OK);
+        } catch {
+            // A blob without its commit sidecar is still a pending upload.
+            throw createError({ statusCode: 404, statusMessage: 'File not found' });
+        }
+
         const ttl = resolveFsUrlTtlSeconds();
         const token = signFsToken(
             {
                 op: 'download',
                 workspace_id: input.workspaceId,
                 user_id: session.user.id,
-                hash: input.hash,
+                hash: parsedHash.canonical,
                 ...(input.mimeType ? { mime_type: input.mimeType } : {}),
             },
             ttl,
@@ -149,7 +164,7 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             url: `/api/storage/fs/download?token=${encodeURIComponent(token)}`,
             method: 'GET',
             expiresAt: Date.now() + ttl * 1000,
-            storageId: `${input.workspaceId}:${input.hash}`,
+            storageId: `${input.workspaceId}:${parsedHash.canonical}`,
         };
     }
 

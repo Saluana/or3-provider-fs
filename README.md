@@ -73,6 +73,7 @@ $OR3_STORAGE_FS_ROOT/
 - **Short-lived tokens**: presigned URLs expire after `OR3_STORAGE_FS_URL_TTL_SECONDS` (default 15 min, maximum 1 hour).
 - **Operation scope**: upload tokens can't be used for download and vice versa.
 - **User scope**: upload/download tokens are bound to the authenticated user and workspace checks.
+- **Committed downloads**: the host endpoint requires live canonical workspace metadata; this adapter additionally requires both the blob and its `.meta.json` commit sidecar. Pending or soft-deleted files return not found.
 - **Atomic writes**: files are written to a temp path first, then renamed to prevent partial-upload corruption.
 - **Integrity checks**: uploads are size-capped by the token's `size_bytes` claim (413) and the stream is verified against the claimed hash before rename (400 `Hash mismatch`).
 - **MIME enforcement**: when the token carries a `mime_type` claim, the upload `Content-Type` must match it (415).

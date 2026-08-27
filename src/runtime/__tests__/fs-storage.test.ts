@@ -133,6 +133,11 @@ describe('FsStorageGatewayAdapter', () => {
 
     describe('presignDownload', () => {
         it('returns a signed download URL', async () => {
+            const objectPath = resolveFsObjectPath(storageRoot, 'ws2', HASH_B);
+            await mkdir(dirname(objectPath), { recursive: true });
+            await writeFile(objectPath, 'blob');
+            await writeFile(getFsObjectMetadataPath(objectPath), '{}');
+
             const result = await adapter.presignDownload(mockEvent, {
                 workspaceId: 'ws2',
                 hash: HASH_B,
@@ -148,6 +153,17 @@ describe('FsStorageGatewayAdapter', () => {
             expect(claims.workspace_id).toBe('ws2');
             expect(claims.user_id).toBe('user-1');
             expect(claims.hash).toBe(HASH_B);
+        });
+
+        it('rejects an uploaded blob that has not crossed the commit sidecar boundary', async () => {
+            const objectPath = resolveFsObjectPath(storageRoot, 'ws2-pending', HASH_B);
+            await mkdir(dirname(objectPath), { recursive: true });
+            await writeFile(objectPath, 'pending');
+
+            await expect(adapter.presignDownload(mockEvent, {
+                workspaceId: 'ws2-pending',
+                hash: HASH_B,
+            })).rejects.toMatchObject({ statusCode: 404 });
         });
 
         it('rejects malformed hash format', async () => {
