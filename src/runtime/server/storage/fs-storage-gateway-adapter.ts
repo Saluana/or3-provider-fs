@@ -30,6 +30,31 @@ import {
 import { parseFsStorageKey, requireFsHash } from './fs-hash';
 import { signFsToken } from './fs-token';
 
+const SAFE_INLINE_MIME_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'image/gif',
+    'application/pdf',
+]);
+
+function normalizeDownloadMime(value: string | undefined): string {
+    const normalized = value?.split(';', 1)[0]?.trim().toLowerCase();
+    return normalized && SAFE_INLINE_MIME_TYPES.has(normalized)
+        ? normalized
+        : 'application/octet-stream';
+}
+
+function sanitizeDownloadFilename(value: string | undefined): string {
+    const sanitized = (value ?? '')
+        .normalize('NFKC')
+        .replace(/[\u0000-\u001f\u007f]/g, '_')
+        .replace(/[\\/]+/g, '_')
+        .trim()
+        .replace(/^\.+$/, '');
+    return sanitized.slice(0, 180) || 'download';
+}
+
 interface FsGcInput {
     workspace_id: string;
     retention_seconds?: number;
@@ -155,7 +180,14 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
                 workspace_id: input.workspaceId,
                 user_id: session.user.id,
                 hash: parsedHash.canonical,
-                ...(input.mimeType ? { mime_type: input.mimeType } : {}),
+                mime_type: normalizeDownloadMime(input.mimeType),
+                disposition:
+                    normalizeDownloadMime(input.mimeType) === 'application/octet-stream'
+                        ? 'attachment'
+                        : input.disposition === 'attachment'
+                            ? 'attachment'
+                            : 'inline',
+                filename: sanitizeDownloadFilename(input.filename),
             },
             ttl,
         );

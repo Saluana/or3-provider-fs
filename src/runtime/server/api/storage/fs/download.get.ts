@@ -56,12 +56,24 @@ export default eventHandler(async (event) => {
         throw createError({ statusCode: 404, statusMessage: 'File not found' });
     }
 
-    if (claims.mime_type) {
-        setResponseHeader(event, 'Content-Type', claims.mime_type);
-    } else {
-        // Prefer an explicit type from the token; fall back so clients can still stream.
-        setResponseHeader(event, 'Content-Type', 'application/octet-stream');
-    }
+    const normalizedMime = claims.mime_type?.split(';', 1)[0]?.trim().toLowerCase();
+    const safeInlineMime = normalizedMime === 'image/png' ||
+        normalizedMime === 'image/jpeg' ||
+        normalizedMime === 'image/webp' ||
+        normalizedMime === 'image/gif' ||
+        normalizedMime === 'application/pdf';
+    const safeMime = safeInlineMime ? normalizedMime : 'application/octet-stream';
+    const disposition = safeInlineMime && claims.disposition === 'inline'
+        ? 'inline'
+        : 'attachment';
+    const filename = (claims.filename ?? 'download')
+        .replace(/[\u0000-\u001f\u007f]/g, '_')
+        .replace(/[\\/]+/g, '_')
+        .slice(0, 180) || 'download';
+    setResponseHeader(event, 'Content-Type', safeMime);
+    setResponseHeader(event, 'Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    setResponseHeader(event, 'X-Content-Type-Options', 'nosniff');
+    setResponseHeader(event, 'Cache-Control', 'private, no-store');
 
     return sendStream(event, fileHandle.createReadStream());
 });

@@ -122,9 +122,6 @@ export default eventHandler(async (event) => {
     try {
         await pipeline(bodyStream, verifier, createWriteStream(temp, { flags: 'wx' }));
 
-        if (writtenBytes === 0) {
-            throw new UploadValidationError(400, 'Missing upload body');
-        }
         if (!digest.finalize()) {
             throw new UploadValidationError(400, 'Hash mismatch');
         }

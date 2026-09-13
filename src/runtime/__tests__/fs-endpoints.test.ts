@@ -257,6 +257,33 @@ describe('fs upload/download handlers', () => {
         });
     });
 
+    it('accepts a zero-byte upload when the hash matches the empty body', async () => {
+        const payload = Buffer.alloc(0);
+        const hash = makeSha256Hash(payload);
+        const token = signFsToken(
+            {
+                op: 'upload',
+                workspace_id: 'ws1',
+                user_id: 'user-1',
+                hash,
+                size_bytes: 0,
+                mime_type: 'application/octet-stream',
+            },
+            300,
+        );
+
+        await expect(uploadHandler(createMockEvent({
+            method: 'PUT',
+            path: `/api/storage/fs/upload?token=${encodeURIComponent(token)}`,
+            headers: { 'content-type': 'application/octet-stream' },
+            body: payload,
+        }))).resolves.toEqual({
+            ok: true,
+            storage_id: `ws1:${hash}`,
+        });
+        await expect(readFile(resolveFsObjectPath(storageRoot, 'ws1', hash))).resolves.toEqual(payload);
+    });
+
     it('streams download with content-type header', async () => {
         const payload = Buffer.from('download me');
         const hash = makeSha256Hash(payload);
@@ -284,7 +311,9 @@ describe('fs upload/download handlers', () => {
         const stream = (event as unknown as { node: { res: { _data: NodeJS.ReadableStream } } }).node.res._data;
         await expect(readNodeStream(stream)).resolves.toEqual(payload);
         const responseHeaders = (event as unknown as { node: { res: { getHeader(name: string): string | string[] | undefined } } }).node.res;
-        expect(responseHeaders.getHeader('content-type')).toBe('text/plain');
+        expect(responseHeaders.getHeader('content-type')).toBe('application/octet-stream');
+        expect(responseHeaders.getHeader('content-disposition')).toBe("attachment; filename*=UTF-8''download");
+        expect(responseHeaders.getHeader('x-content-type-options')).toBe('nosniff');
     });
 
     it('rejects download for token subject mismatch', async () => {

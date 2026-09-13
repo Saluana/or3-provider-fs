@@ -76,7 +76,9 @@ $OR3_STORAGE_FS_ROOT/
 - **Committed downloads**: the host endpoint requires live canonical workspace metadata; this adapter additionally requires both the blob and its `.meta.json` commit sidecar. Pending or soft-deleted files return not found.
 - **Atomic writes**: files are written to a temp path first, then renamed to prevent partial-upload corruption.
 - **Integrity checks**: uploads are size-capped by the token's `size_bytes` claim (413) and the stream is verified against the claimed hash before rename (400 `Hash mismatch`).
+- **Empty files**: a zero-byte upload is valid when its token claims size `0` and the empty-body hash.
 - **MIME enforcement**: when the token carries a `mime_type` claim, the upload `Content-Type` must match it (415).
+- **Safe downloads**: generic or active content is returned as an `application/octet-stream` attachment with `X-Content-Type-Options: nosniff`; only supported raster images and PDFs may remain inline.
 - **Symlink-safe downloads**: downloads resolve the real path and open with `O_NOFOLLOW`, rejecting anything that escapes the storage root.
 
 ## Backup

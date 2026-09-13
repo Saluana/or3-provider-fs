@@ -141,6 +141,9 @@ describe('FsStorageGatewayAdapter', () => {
             const result = await adapter.presignDownload(mockEvent, {
                 workspaceId: 'ws2',
                 hash: HASH_B,
+                mimeType: 'image/png',
+                disposition: 'inline',
+                filename: 'photo.png',
             });
 
             expect(result.url).toContain('/api/storage/fs/download?token=');
@@ -153,6 +156,9 @@ describe('FsStorageGatewayAdapter', () => {
             expect(claims.workspace_id).toBe('ws2');
             expect(claims.user_id).toBe('user-1');
             expect(claims.hash).toBe(HASH_B);
+            expect(claims.mime_type).toBe('image/png');
+            expect(claims.disposition).toBe('inline');
+            expect(claims.filename).toBe('photo.png');
         });
 
         it('rejects an uploaded blob that has not crossed the commit sidecar boundary', async () => {

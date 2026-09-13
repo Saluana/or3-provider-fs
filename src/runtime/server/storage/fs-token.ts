@@ -15,6 +15,8 @@ export interface FsStorageTokenPayload {
     hash: string;
     size_bytes?: number;
     mime_type?: string;
+    disposition?: 'inline' | 'attachment';
+    filename?: string;
 }
 
 const SAFE_WORKSPACE_ID = /^[a-zA-Z0-9_-]+$/;
@@ -56,7 +58,7 @@ function assertTokenPayload(
 
     if (
         sizeBytes !== undefined &&
-        (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0 || !Number.isInteger(sizeBytes))
+        (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes < 0 || !Number.isInteger(sizeBytes))
     ) {
         throw new Error('Invalid size_bytes claim');
     }
@@ -66,6 +68,20 @@ function assertTokenPayload(
         (typeof candidate.mime_type !== 'string' || candidate.mime_type.trim().length === 0)
     ) {
         throw new Error('Invalid mime_type claim');
+    }
+
+    if (
+        candidate.disposition !== undefined &&
+        candidate.disposition !== 'inline' &&
+        candidate.disposition !== 'attachment'
+    ) {
+        throw new Error('Invalid disposition claim');
+    }
+    if (
+        candidate.filename !== undefined &&
+        (typeof candidate.filename !== 'string' || candidate.filename.length === 0 || /[\r\n]/.test(candidate.filename))
+    ) {
+        throw new Error('Invalid filename claim');
     }
 
     if (typeof candidate.exp !== 'number' || typeof candidate.iat !== 'number') {
