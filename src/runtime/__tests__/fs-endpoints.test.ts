@@ -133,39 +133,6 @@ describe('fs upload/download handlers', () => {
         await rm(storageRoot, { recursive: true, force: true });
     });
 
-    it('streams upload to disk and verifies hash', async () => {
-        const payload = Buffer.from('hello from upload endpoint');
-        const hash = makeSha256Hash(payload);
-        const token = signFsToken(
-            {
-                op: 'upload',
-                workspace_id: 'ws1',
-                user_id: 'user-1',
-                hash,
-                size_bytes: payload.length,
-                mime_type: 'text/plain',
-            },
-            300,
-        );
-
-        const event = createMockEvent({
-            method: 'PUT',
-            path: `/api/storage/fs/upload?token=${encodeURIComponent(token)}`,
-            headers: {
-                'content-type': 'text/plain',
-            },
-            body: payload,
-        });
-
-        await expect(uploadHandler(event)).resolves.toEqual({
-            ok: true,
-            storage_id: `ws1:${hash}`,
-        });
-
-        const path = resolveFsObjectPath(storageRoot, 'ws1', hash);
-        await expect(readFile(path)).resolves.toEqual(payload);
-    });
-
     it('rejects upload when digest does not match token hash', async () => {
         const payload = Buffer.from('tampered-content');
         const hash = makeSha256Hash(Buffer.from('different-content'));

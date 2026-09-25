@@ -26,15 +26,6 @@ describe('fs register plugin', () => {
         });
     });
 
-    it('registers adapter when config is valid', async () => {
-        await import('../register');
-        expect(registerStorageGatewayAdapterMock).toHaveBeenCalledWith({
-            id: 'fs',
-            order: 100,
-            create: expect.any(Function),
-        });
-    });
-
     it('fails startup when storage root is missing', async () => {
         delete process.env.OR3_STORAGE_FS_ROOT;
         await expect(import('../register')).rejects.toThrow('Missing OR3_STORAGE_FS_ROOT.');

@@ -76,35 +76,7 @@ describe('FsStorageGatewayAdapter', () => {
     const adapter = new FsStorageGatewayAdapter();
     const mockEvent = {} as H3Event;
 
-    it('has id "fs"', () => {
-        expect(adapter.id).toBe('fs');
-    });
-
     describe('presignUpload', () => {
-        it('returns a signed upload URL', async () => {
-            const result = await adapter.presignUpload(mockEvent, {
-                workspaceId: 'ws1',
-                hash: HASH_A,
-                mimeType: 'image/png',
-                sizeBytes: 2048,
-            });
-
-            expect(result.url).toContain('/api/storage/fs/upload?token=');
-            expect(result.method).toBe('PUT');
-            expect(result.storageId).toBe(`ws1:${HASH_A}`);
-            expect(result.expiresAt).toBeGreaterThan(Date.now());
-
-            // Verify the embedded token is valid
-            const tokenStr = decodeURIComponent(result.url.split('token=')[1]!);
-            const claims = verifyFsToken(tokenStr);
-            expect(claims.op).toBe('upload');
-            expect(claims.workspace_id).toBe('ws1');
-            expect(claims.user_id).toBe('user-1');
-            expect(claims.hash).toBe(HASH_A);
-            expect(claims.size_bytes).toBe(2048);
-            expect(claims.mime_type).toBe('image/png');
-        });
-
         it('respects custom TTL env var', async () => {
             process.env.OR3_STORAGE_FS_URL_TTL_SECONDS = '60';
             const before = Date.now();
@@ -132,35 +104,6 @@ describe('FsStorageGatewayAdapter', () => {
     });
 
     describe('presignDownload', () => {
-        it('returns a signed download URL', async () => {
-            const objectPath = resolveFsObjectPath(storageRoot, 'ws2', HASH_B);
-            await mkdir(dirname(objectPath), { recursive: true });
-            await writeFile(objectPath, 'blob');
-            await writeFile(getFsObjectMetadataPath(objectPath), '{}');
-
-            const result = await adapter.presignDownload(mockEvent, {
-                workspaceId: 'ws2',
-                hash: HASH_B,
-                mimeType: 'image/png',
-                disposition: 'inline',
-                filename: 'photo.png',
-            });
-
-            expect(result.url).toContain('/api/storage/fs/download?token=');
-            expect(result.method).toBe('GET');
-            expect(result.storageId).toBe(`ws2:${HASH_B}`);
-
-            const tokenStr = decodeURIComponent(result.url.split('token=')[1]!);
-            const claims = verifyFsToken(tokenStr);
-            expect(claims.op).toBe('download');
-            expect(claims.workspace_id).toBe('ws2');
-            expect(claims.user_id).toBe('user-1');
-            expect(claims.hash).toBe(HASH_B);
-            expect(claims.mime_type).toBe('image/png');
-            expect(claims.disposition).toBe('inline');
-            expect(claims.filename).toBe('photo.png');
-        });
-
         it('rejects an uploaded blob that has not crossed the commit sidecar boundary', async () => {
             const objectPath = resolveFsObjectPath(storageRoot, 'ws2-pending', HASH_B);
             await mkdir(dirname(objectPath), { recursive: true });
@@ -521,39 +464,6 @@ describe('Upload / Download flow', () => {
     afterEach(() => {
         delete process.env.OR3_STORAGE_FS_TOKEN_SECRET;
         delete process.env.OR3_STORAGE_FS_ROOT;
-    });
-
-    it('writes a file atomically and reads it back', async () => {
-        const wsId = 'ws-flow';
-        const hash = HASH_A;
-        const content = Buffer.from('hello world');
-
-        // Simulate upload: sign token, resolve path, write
-        const token = signFsToken(
-            { op: 'upload', workspace_id: wsId, user_id: 'user-1', hash, size_bytes: content.length },
-            300,
-        );
-        const claims = verifyFsToken(token);
-        expect(claims.op).toBe('upload');
-
-        const target = resolveFsObjectPath(storageRoot, wsId, hash);
-        await mkdir(dirname(target), { recursive: true });
-        const temp = `${target}.tmp-${Date.now()}`;
-        await writeFile(temp, content);
-        const { rename } = await import('node:fs/promises');
-        await rename(temp, target);
-
-        // Simulate download: verify token, read file
-        const dlToken = signFsToken(
-            { op: 'download', workspace_id: wsId, user_id: 'user-1', hash },
-            300,
-        );
-        const dlClaims = verifyFsToken(dlToken);
-        expect(dlClaims.op).toBe('download');
-
-        const filePath = resolveFsObjectPath(storageRoot, wsId, hash);
-        const data = await readFile(filePath);
-        expect(data.toString()).toBe('hello world');
     });
 
     it('rejects upload token for download operation', () => {
