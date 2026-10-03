@@ -91,14 +91,15 @@ rsync -a "$OR3_STORAGE_FS_ROOT" /backup/or3-storage/
 
 Committed blobs create `.meta.json` sidecars. Include those files in backups.
 
-## Garbage Collection Safety
+## Deletion and Garbage Collection Safety
 
-Filesystem blob GC uses bounded canonical queries (`live_metadata`, `reference_edges`)
-against materialized `file_meta` and live message/post reference edges, then rechecks
-immediately before deleting a retained blob and its sidecar. It never reconstructs
-liveness from sync history. When the active sync provider does not expose canonical
-storage queries, GC fails closed with `{ deleted_count: 0, status: "disabled",
-reason: "canonical_reference_state_required" }` and deletes nothing.
+Physical deletion is disabled until a provider-owned protocol can coordinate
+filesystem unlink with canonical sync writes. Existing blobs or commit sidecars
+return HTTP 503; an already absent object is an idempotent success. GC returns
+`{ deleted_count: 0, status: "disabled", reason: "deletion_coordination_required" }`
+without deleting bytes or querying canonical state. Logical Trash/removal retains
+the original bytes. Independent canonical scans cannot prevent a concurrent
+restore or reference write.
 
 GC runs per workspace via the provider admin action `storage.gc` (default retention
 30 days, `retentionDays`/`retentionSeconds` and `limit` accepted in the action payload).
@@ -144,3 +145,7 @@ prints its selected path; restart it after provider edits. Missing repositories
 or failed builds fall back to installed packages with a warning.
 `OR3_LOCAL_PROVIDERS=false` disables local selection. Production builds use the
 installed package, so local development does not publish these changes.
+
+## Physical deletion coordination
+
+Filesystem unlink and GC fail closed until a cross-backend deletion claim protocol exists. Independent canonical scans cannot prevent a restore/reference race. Existing physical objects return 503 from delete; GC reports disabled with `deletion_coordination_required`. Logical Files Trash/removal retains the bytes.

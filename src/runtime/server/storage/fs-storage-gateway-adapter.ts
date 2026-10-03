@@ -6,7 +6,7 @@
  */
 import type { H3Event } from 'h3';
 import { createError } from 'h3';
-import { access, mkdir, opendir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
+import { access, mkdir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type {
     StorageGatewayAdapter,
@@ -16,18 +16,15 @@ import type {
     PresignDownloadResponse,
     DeleteObjectRequest,
 } from '~~/server/storage/gateway/types';
-import type { CanonicalStorageQueryKind } from '~~/server/sync/gateway/types';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
-import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
 import { resolveFsUrlTtlSeconds } from './fs-config';
 import {
     assertValidWorkspaceId,
     getFsObjectMetadataPath,
     resolveFsObjectPath,
-    resolveFsWorkspacePath,
 } from './fs-paths';
-import { parseFsStorageKey, requireFsHash } from './fs-hash';
+import { requireFsHash } from './fs-hash';
 import { signFsToken } from './fs-token';
 
 const SAFE_INLINE_MIME_TYPES = new Set([
@@ -256,126 +253,22 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             input.workspaceId,
             input.hash,
         );
-        for (const path of [objectPath, getFsObjectMetadataPath(objectPath)]) {
-            await unlink(path).catch((error: NodeJS.ErrnoException) => {
-                if (error.code !== 'ENOENT') throw error;
-            });
-        }
+        const paths = [objectPath, getFsObjectMetadataPath(objectPath)];
+        const present = await Promise.all(paths.map(path => access(path).then(() => true, error => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+            throw error;
+        })));
+        if (!present.some(Boolean)) return;
+        // An independent database query cannot coordinate a filesystem unlink
+        // with other instances restoring metadata or adding references.
+        throw createError({ statusCode: 503, statusMessage: 'Provider-owned deletion coordination is required' });
     }
 
-    async gc(
-        event: H3Event,
-        input: unknown,
-    ): Promise<{
-        deleted_count: number;
-        scanned_count?: number;
-        status: 'completed' | 'disabled';
-        reason?: 'canonical_reference_state_required';
+    async gc(_event: H3Event, input: unknown): Promise<{
+        deleted_count: number; status: 'disabled'; reason: 'deletion_coordination_required';
     }> {
-        const { workspaceId, retentionSeconds, limit = 100 } = parseGcInput(input);
-        const sync = getActiveSyncGatewayAdapter();
-        if (!sync?.queryCanonicalStorage) {
-            return {
-                deleted_count: 0,
-                status: 'disabled',
-                reason: 'canonical_reference_state_required',
-            };
-        }
-
-        const hasCanonicalRecord = async (
-            kind: Extract<CanonicalStorageQueryKind, 'live_metadata' | 'reference_edges'>,
-            hash: string,
-        ): Promise<boolean> => {
-            let cursor: string | undefined;
-            do {
-                const page = await sync.queryCanonicalStorage!(event, {
-                    scope: { workspaceId },
-                    kind,
-                    hash,
-                    cursor,
-                    limit: 100,
-                });
-                if (page.items.length > 0) return true;
-                if (page.hasMore && !page.nextCursor) {
-                    throw createError({
-                        statusCode: 502,
-                        statusMessage: 'Canonical storage provider returned an invalid page',
-                    });
-                }
-                cursor = page.nextCursor;
-            } while (cursor);
-            return false;
-        };
-
-        const root = getStorageRootOrThrow();
-        const workspacePath = resolveFsWorkspacePath(root, workspaceId);
-        const cutoffMs = Date.now() - retentionSeconds * 1000;
-        const candidates: Array<{ hash: string; objectPath: string; metadataPath: string }> = [];
-        const scanLimit = Math.min(500, Math.max(limit, limit * 4));
-        let scannedCount = 0;
-
-        let directory;
-        try {
-            directory = await opendir(workspacePath);
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-                return { deleted_count: 0, scanned_count: 0, status: 'completed' };
-            }
-            throw error;
-        }
-
-        try {
-            for await (const entry of directory) {
-                if (!entry.isFile() || entry.name.endsWith('.meta.json')) continue;
-                const parsed = parseFsStorageKey(entry.name);
-                if (!parsed) continue;
-                scannedCount += 1;
-                const objectPath = resolveFsObjectPath(root, workspaceId, parsed.canonical);
-                const info = await stat(objectPath);
-                if (info.mtimeMs <= cutoffMs) {
-                    candidates.push({
-                        hash: parsed.canonical,
-                        objectPath,
-                        metadataPath: getFsObjectMetadataPath(objectPath),
-                    });
-                }
-                if (candidates.length >= Math.min(limit, 500) || scannedCount >= scanLimit) break;
-            }
-        } finally {
-            await directory.close().catch(() => undefined);
-        }
-
-        // Resolve every candidate before issuing the first delete. If the
-        // canonical backend is unavailable, this run makes no destructive change.
-        const unreferenced: typeof candidates = [];
-        for (const candidate of candidates) {
-            const hasMetadata = await hasCanonicalRecord('live_metadata', candidate.hash);
-            const hasReference = hasMetadata
-                ? true
-                : await hasCanonicalRecord('reference_edges', candidate.hash);
-            if (!hasMetadata && !hasReference) unreferenced.push(candidate);
-        }
-
-        let deletedCount = 0;
-        for (const candidate of unreferenced) {
-            // Recheck immediately before deletion so a reference created during
-            // the initial scan wins over collection.
-            if (await hasCanonicalRecord('live_metadata', candidate.hash)) continue;
-            if (await hasCanonicalRecord('reference_edges', candidate.hash)) continue;
-            await unlink(candidate.objectPath).catch((error: NodeJS.ErrnoException) => {
-                if (error.code !== 'ENOENT') throw error;
-            });
-            await unlink(candidate.metadataPath).catch((error: NodeJS.ErrnoException) => {
-                if (error.code !== 'ENOENT') throw error;
-            });
-            deletedCount += 1;
-        }
-
-        return {
-            deleted_count: deletedCount,
-            scanned_count: scannedCount,
-            status: 'completed',
-        };
+        parseGcInput(input);
+        return { deleted_count: 0, status: 'disabled', reason: 'deletion_coordination_required' };
     }
 }
 
