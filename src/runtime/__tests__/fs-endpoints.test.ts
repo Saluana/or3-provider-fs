@@ -428,10 +428,10 @@ describe('fs upload/download handlers', () => {
         ).resolves.toEqual({
             deleted_count: 0,
             status: 'disabled',
-            reason: 'canonical_reference_state_required',
+            reason: 'deletion_coordination_required',
         });
         await expect(readFile(objectPath)).resolves.toEqual(payload);
         await expect(readFile(metadataPath)).resolves.toBeTruthy();
-        expect(getActiveSyncGatewayAdapterMock).toHaveBeenCalledOnce();
+        expect(getActiveSyncGatewayAdapterMock).not.toHaveBeenCalled();
     });
 });
