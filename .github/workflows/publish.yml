@@ -52,6 +52,17 @@ jobs:
         run: bun install --frozen-lockfile
       - run: npm install --global npm@11
       - run: bun install --frozen-lockfile
+      - name: Check generated host contract fixture
+        run: |
+          bun --eval '
+            import { generateProviderHostContract } from "../or3-chat/scripts/generate-provider-host-contracts.ts";
+            const expected = generateProviderHostContract(process.cwd());
+            const actual = await Bun.file("src/shims/or3-chat-contract.ts").text();
+            if (actual !== expected) {
+              throw new Error("Filesystem host contract shim is stale; regenerate it with bun run provider-host-contracts from the pinned OR3 Chat checkout.");
+            }
+            console.log("Filesystem host contract fixture matches the pinned host generator.");
+          '
       - name: Verify release version
         run: |
           set -euo pipefail

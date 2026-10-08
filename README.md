@@ -113,6 +113,11 @@ bun run type-check  # TypeScript check
 bun run build       # Build nuxt module
 ```
 
+After changing imports from the OR3 Chat host, regenerate the release-only
+`src/shims/or3-chat-contract.ts` fixture with `bun run provider-host-contracts`
+from the sibling `or3-chat` checkout. CI compares the committed fixture with the
+generator from its pinned host revision before qualification and publication.
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |
