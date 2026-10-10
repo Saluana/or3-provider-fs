@@ -7,6 +7,10 @@ export type CanonicalStorageRecord<T = any, U = any, V = any, W = any, X = any> 
 export const CanonicalStorageRecord: any = undefined;
 export type DeleteObjectRequest<T = any, U = any, V = any, W = any, X = any> = any;
 export const DeleteObjectRequest: any = undefined;
+export type ExternalStorageGenerationCoordinatorV1<T = any, U = any, V = any, W = any, X = any> = any;
+export const ExternalStorageGenerationCoordinatorV1: any = undefined;
+export type ExternalStorageGenerationKey<T = any, U = any, V = any, W = any, X = any> = any;
+export const ExternalStorageGenerationKey: any = undefined;
 export type getActiveSyncGatewayAdapter<T = any, U = any, V = any, W = any, X = any> = any;
 export const getActiveSyncGatewayAdapter: any = undefined;
 export type PresignDownloadRequest<T = any, U = any, V = any, W = any, X = any> = any;

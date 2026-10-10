@@ -8,6 +8,10 @@ Registers a `StorageGatewayAdapter` (ID: `fs`) that stores uploaded files on the
 
 **This is a storage-only provider.** It does not provide auth or sync. Pair it with `or3-provider-basic-auth` + `or3-provider-sqlite` (or Clerk + Convex) for a complete stack.
 
+An internal [immutable-generation protocol](docs/immutable-generations.md) and real
+SQLite/filesystem race-test lane are available for development qualification.
+They are dormant; production cleanup remains disabled and legacy paths are retained.
+
 The adapter only registers when auth and storage are enabled and `fs` is the active storage provider (e.g. `SSR_AUTH_ENABLED=true`, `OR3_STORAGE_ENABLED=true`, `NUXT_PUBLIC_STORAGE_PROVIDER=fs`). Otherwise registration is skipped with a startup warning.
 
 ## Install
