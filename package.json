@@ -34,7 +34,9 @@
     "lint": "eslint . --max-warnings=0",
     "type-check": "tsc --noEmit",
     "type-check:standalone": "tsc -p tsconfig.release.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:generations:sqlite": "vitest run --config vitest.generations.config.ts",
+    "type-check:generations": "tsc -p tsconfig.generations.json --noEmit"
     },
     "publishConfig": {
         "access": "public"
