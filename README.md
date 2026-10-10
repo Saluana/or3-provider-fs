@@ -104,6 +104,25 @@ restore or reference write.
 GC runs per workspace via the provider admin action `storage.gc` (default retention
 30 days, `retentionDays`/`retentionSeconds` and `limit` accepted in the action payload).
 
+### Read-only storage usage
+
+The workspace-scoped provider admin action `storage.usage` returns a bounded,
+non-atomic observation. Optional `maxEntries` and `maxMetadataRecords` limits
+default to 10,000 and accept integers from 1 through 50,000.
+
+Canonical active metadata, retained deleted metadata and upload reservations
+are separate from observed active blobs, retained blobs, incomplete transfers,
+sidecars and unclassified bytes. Unknown or failed canonical views are null,
+not zero. Filesystem counts are partial when `filesystem.complete` is false;
+check warnings before using them. Unsupported safe directory descriptor views
+also report an incomplete filesystem observation.
+
+Apparent bytes count observed file names. Allocated bytes count unique observed
+inodes using filesystem block statistics, so hard links are deduplicated within
+this scan; they do not establish exclusive ownership or reclaimable bytes.
+Volume totals describe the entire backing filesystem, not workspace quota.
+Neither these observations nor retained metadata authorize physical cleanup.
+
 ## Development
 
 ```bash
@@ -135,7 +154,7 @@ generator from its pinned host revision before qualification and publication.
 ## v2 TODOs
 
 - [x] Set `Content-Type` on downloads from the token's mime claim (done — with `application/octet-stream` fallback)
-- [ ] Use `.meta.json` sidecars to avoid directory scans during GC (sidecars are now written on commit and removed on delete, but GC still enumerates the workspace directory)
+- [ ] Add durable cross-backend deletion coordination before enabling physical cleanup. Commit sidecars and read-only accounting alone do not make deletion safe.
 
 ## Compatibility
 
