@@ -9,7 +9,7 @@ import type {
 } from '~~/server/admin/providers/types';
 import { createFsStorageGatewayAdapter } from '../../storage/fs-storage-gateway-adapter';
 import { validateFsStorageConfig } from '../../storage/fs-config';
-import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
+import { observeFsStorageUsage } from '../../storage/fs-usage';
 
 const FS_PROVIDER_ID = 'fs';
 const DEFAULT_RETENTION_SECONDS = 30 * 24 * 3600;
@@ -44,35 +44,32 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
         for (const message of diagnostics.errors) {
             warnings.push({ level: 'error', message });
         }
-        const canonicalQueriesAvailable = Boolean(
-            getActiveSyncGatewayAdapter()?.queryCanonicalStorage
-        );
-        if (!canonicalQueriesAvailable) {
-            warnings.push({
-                level: 'warning',
-                message:
-                    'Destructive filesystem blob GC is disabled until canonical reference state is available.',
-            });
-        }
+        warnings.push({
+            level: 'warning',
+            message:
+                'Physical filesystem cleanup is disabled until uploads, canonical writes, and deletion share a durable coordination protocol. Deleted bytes remain on disk.',
+        });
 
         return {
             details: {
                 root: diagnostics.config.root,
                 tokenSecretConfigured: Boolean(diagnostics.config.tokenSecret),
                 urlTtlSeconds: diagnostics.config.urlTtlSeconds,
-                gcStatus: canonicalQueriesAvailable ? 'available' : 'disabled',
-                ...(canonicalQueriesAvailable
-                    ? {}
-                    : { gcDisabledReason: 'canonical_reference_state_required' }),
+                gcStatus: 'disabled',
+                gcDisabledReason: 'deletion_coordination_required',
+                usageObservation: 'on_demand',
             },
             warnings,
             actions: [
                 {
                     id: 'storage.gc',
-                    label: canonicalQueriesAvailable ? 'Run Storage GC' : 'Check Storage GC Status',
-                    description: canonicalQueriesAvailable
-                        ? 'Deletes retained blobs only after canonical metadata and reference checks.'
-                        : 'Reports that destructive GC is disabled; does not scan sync history or delete files.',
+                    label: 'Check Storage GC Status',
+                    description: 'Reports that destructive GC is disabled; does not scan sync history or delete files.',
+                },
+                {
+                    id: 'storage.usage',
+                    label: 'Observe Storage Usage',
+                    description: 'Read-only, bounded observation of logical metadata, retained bytes, incomplete transfers and disk allocation. Does not reclaim bytes.',
                 },
             ],
         };
@@ -84,7 +81,7 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
         payload: Record<string, unknown> | undefined,
         ctx: ProviderActionContext
     ): Promise<unknown> {
-        if (actionId !== 'storage.gc') {
+        if (actionId !== 'storage.gc' && actionId !== 'storage.usage') {
             throw createError({ statusCode: 400, statusMessage: 'Unknown action' });
         }
 
@@ -92,6 +89,18 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
             throw createError({
                 statusCode: 400,
                 statusMessage: 'Workspace not resolved',
+            });
+        }
+
+        if (actionId === 'storage.usage') {
+            for (const key of ['maxEntries', 'maxMetadataRecords']) {
+                if (payload?.[key] !== undefined && typeof payload[key] !== 'number') {
+                    throw createError({ statusCode: 400, statusMessage: 'Invalid observation limit' });
+                }
+            }
+            return observeFsStorageUsage(event, ctx.session.workspace.id, {
+                maxEntries: typeof payload?.maxEntries === 'number' ? payload.maxEntries : undefined,
+                maxMetadataRecords: typeof payload?.maxMetadataRecords === 'number' ? payload.maxMetadataRecords : undefined,
             });
         }
 
