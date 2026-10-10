@@ -201,6 +201,18 @@ describe('FsStorageGatewayAdapter', () => {
     });
 
     describe('read-only usage observation', () => {
+        it('reports dormant generation bytes as outside the legacy observer coverage', async () => {
+            const namespace = join(storageRoot, 'generations-v1');
+            await mkdir(namespace);
+            try {
+                await writeFile(join(namespace, 'retained-test-bytes'), 'not counted by legacy layout');
+                const result = await observeFsStorageUsage(mockEvent, 'ws-generation-only');
+                expect(result.filesystem.complete).toBe(false);
+                expect(result.warnings).toContain('generation_namespace_unclassified');
+                expect(result.filesystem.generationNamespaceBytes).toBeNull();
+                expect(await readFile(join(namespace, 'retained-test-bytes'), 'utf8')).toBe('not counted by legacy layout');
+            } finally { await rm(namespace, { recursive: true, force: true }); }
+        });
         // Failure modes: disk usage mistaken for quota, tombstones omitted,
         // abandoned transfers ignored, symlinks followed, moving pages double
         // counted, or bounded/failed scans silently presented as complete.

@@ -1,6 +1,6 @@
 /**
- * Dormant immutable-generation filesystem primitives. No route, registry or
- * cleanup capability calls this module. Legacy hash paths are never selected.
+ * Dormant immutable-generation filesystem primitives. No registered route,
+ * registry or cleanup capability selects them. Legacy paths are never selected.
  *
  * A permanent slot is an allocation tombstone. Only its exclusive creator may
  * initialize payload; retries NEVER repair/recreate payload. Incomplete slot
@@ -13,14 +13,28 @@ import { link, lstat, mkdir, open, opendir, rmdir, stat, unlink } from 'node:fs/
 import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { ExternalStorageGenerationCoordinatorV1, ExternalStorageGenerationKey } from '~~/server/storage/gateway/generation-lifecycle';
+import type { ExternalStorageGenerationUploadCoordinatorV1 } from '~~/server/storage/gateway/generation-upload';
 import { parseFsHash } from './fs-hash';
 
-export interface FsGenerationSpec extends ExternalStorageGenerationKey { sizeBytes: number }
+export interface FsGenerationSpec extends ExternalStorageGenerationKey {
+    workspaceId: string;
+    hash: string;
+    generationId: string;
+    sizeBytes: number;
+}
+export interface FsGenerationReadyReceipt extends FsGenerationSpec {
+    namespaceId: string;
+    storageId: string;
+    readyReceiptId: string;
+}
+export type FsGenerationAllocationInspection =
+    | { status: 'incomplete' }
+    | { status: 'ready' | 'payload_missing'; receipt: FsGenerationReadyReceipt };
 type Checkpoint = 'slot_created' | 'ready_written' | 'before_blob_publish' | 'blob_published'
     | 'entry_unlinked' | 'before_payload_rmdir' | 'payload_removed';
 type Hooks = { checkpoint?: (phase: Checkpoint) => Promise<void> };
 type Directory = { handle: FileHandle; path: string; identity: BigIntStats };
-type Ready = FsGenerationSpec & { version: 1; namespaceId: string; storageId: string; payloadDevice: string; payloadInode: string };
+type Ready = FsGenerationSpec & { version: 1; namespaceId: string; storageId: string; payloadDevice: string; payloadInode: string; readyReceiptId?: string };
 type Removal = { status: 'removed' | 'already_absent' | 'pending'; removedEntries: number; reason?: string };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -104,6 +118,19 @@ export class FsGenerationStore {
         return ['fs-generation-v1', this.namespaceId, spec.workspaceId, spec.generationId, spec.hash.slice(7)].join(':');
     }
 
+    assertNamespace(namespaceId: string): void {
+        if (namespaceId !== this.namespaceId) invalid('namespace configuration mismatch');
+    }
+
+    /** Opaque IDs are validated against this provisioned namespace and the
+     * caller's independently authorized workspace/hash, never used as paths. */
+    resolveStorageId(storageId: string, workspaceId: string, hash: string, sizeBytes: number): FsGenerationSpec {
+        const parts = storageId.split(':');
+        const spec = this.spec({ workspaceId, hash, sizeBytes, generationId: parts[3] ?? '' });
+        if (storageId !== this.storageId(spec)) invalid('storage identity mismatch');
+        return spec;
+    }
+
     /** Explicit namespace provisioning; never performed by publication/removal. */
     async provision(): Promise<void> {
         await scoped(async handles => {
@@ -168,6 +195,7 @@ export class FsGenerationStore {
                 await writeManifest(slot, 'ready.json', {
                     ...spec, version: 1, namespaceId: this.namespaceId, storageId: this.storageId(spec),
                     payloadDevice: String(payload.identity.dev), payloadInode: String(payload.identity.ino),
+                    readyReceiptId: randomUUID(),
                 });
                 await this.hooks.checkpoint?.('ready_written');
             }
@@ -187,23 +215,114 @@ export class FsGenerationStore {
         });
     }
 
-    private async verifyBlob(payload: Directory, spec: FsGenerationSpec): Promise<void> {
-        await scoped(async handles => {
+    private receipt(ready: Ready): FsGenerationReadyReceipt {
+        if (typeof ready.readyReceiptId !== 'string' || !UUID.test(ready.readyReceiptId)) invalid('missing durable readiness receipt');
+        return { workspaceId: ready.workspaceId, generationId: ready.generationId, hash: ready.hash,
+            sizeBytes: ready.sizeBytes, storageId: ready.storageId, namespaceId: ready.namespaceId,
+            readyReceiptId: ready.readyReceiptId };
+    }
+
+    /** Read-only recovery inspection. Incomplete/missing paths never authorize
+     * removal; importantly this method never retries allocation or repairs an
+     * older manifest lacking a durable readiness receipt.
+     */
+    async inspectAllocation(input: FsGenerationSpec): Promise<FsGenerationAllocationInspection> {
+        const spec = this.spec(input);
+        return scoped(async handles => {
+            let slot: Directory;
+            let ready: Ready;
+            try {
+                const workspace = await this.workspace(spec, handles);
+                slot = await directory(join(workspace.path, spec.generationId), handles);
+                ready = await this.ready(slot, spec);
+            } catch (error) {
+                if (isMissing(error)) return { status: 'incomplete' };
+                throw error;
+            }
+            const receipt = this.receipt(ready);
+            let payload: Directory;
+            try { payload = await this.payload(slot, ready, handles); }
+            catch (error) {
+                if (isMissing(error)) {
+                    for (const handle of [...handles].reverse()) await handle.sync();
+                    return { status: 'payload_missing', receipt };
+                }
+                throw error;
+            }
+            await this.persistPublication(handles, slot, payload);
+            return { status: 'ready', receipt };
+        });
+    }
+
+    /** Re-establishes trusted publication after a lost response/process crash.
+     * Never trusts a client receipt or a file-existence check as byte proof.
+     */
+    async verifyPublication(input: FsGenerationSpec): Promise<FsGenerationReadyReceipt> {
+        const spec = this.spec(input);
+        return scoped(async handles => {
+            const workspace = await this.workspace(spec, handles);
+            const slot = await directory(join(workspace.path, spec.generationId), handles);
+            const ready = await this.ready(slot, spec);
+            const receipt = this.receipt(ready);
+            const payload = await this.payload(slot, ready, handles);
+            await this.verifyBlob(payload, spec);
+            await this.persistPublication(handles, slot, payload);
+            return receipt;
+        });
+    }
+
+    /** Rehash the pinned immutable file before handing its descriptor to the
+     * response owner. The caller must close it, including on aborted responses.
+     * An open descriptor is never evidence of reclaimed physical disk bytes.
+     */
+    async openPublication(input: FsGenerationSpec): Promise<FileHandle> {
+        const spec = this.spec(input);
+        let file: FileHandle | undefined;
+        try {
+            await scoped(async handles => {
+                const workspace = await this.workspace(spec, handles);
+                const slot = await directory(join(workspace.path, spec.generationId), handles);
+                const ready = await this.ready(slot, spec);
+                this.receipt(ready);
+                const payload = await this.payload(slot, ready, handles);
+                file = await this.verifyBlob(payload, spec, true);
+            });
+            if (!file) invalid('publication unavailable');
+            return file;
+        } catch (error) {
+            if (file) await file.close();
+            throw error;
+        }
+    }
+
+    private async persistPublication(handles: FileHandle[], slot: Directory, payload: Directory): Promise<void> {
+        // Persist every namespace edge independently of allocation's caller.
+        for (const handle of [...handles].reverse()) await handle.sync();
+        const namedPayload = await lstat(join(slot.path, 'payload'), { bigint: true });
+        if (!namedPayload.isDirectory() || !sameInode(namedPayload, payload.identity)) invalid('payload directory substituted');
+    }
+
+    private async verifyBlob(payload: Directory, spec: FsGenerationSpec, keepOpen = false): Promise<FileHandle | undefined> {
+        return scoped(async handles => {
             const handle = await open(join(payload.path, 'blob'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
             handles.push(handle);
             const before = await handle.stat({ bigint: true });
             if (!before.isFile() || before.nlink !== 1n || before.size !== BigInt(spec.sizeBytes)) invalid('unsafe or mismatched published blob');
             const digest = createHash('sha256');
             let size = 0;
-            for await (const chunk of handle.createReadStream({ autoClose: false })) {
-                size += chunk.length;
+            const buffer = Buffer.alloc(64 * 1024);
+            while (true) {
+                const { bytesRead } = await handle.read(buffer, 0, buffer.length, size);
+                if (bytesRead === 0) break;
+                size += bytesRead;
                 if (size > spec.sizeBytes) invalid('published blob grew');
-                digest.update(chunk);
+                digest.update(buffer.subarray(0, bytesRead));
             }
             const current = await lstat(join(payload.path, 'blob'), { bigint: true });
             if (!current.isFile() || current.nlink !== 1n || !sameInode(before, current) || size !== spec.sizeBytes ||
                 'sha256:' + digest.digest('hex') !== spec.hash) invalid('published blob verification failed');
             await handle.sync();
+            if (keepOpen) { handles.pop(); return handle; }
         });
     }
 
@@ -249,11 +368,7 @@ export class FsGenerationStore {
             }
             if (failure) throw failure;
             await this.verifyBlob(payload, spec);
-            // Persist every namespace edge independently of allocation's caller.
-            // A creator may still be paused before syncing its parent directory.
-            for (const handle of [...handles].reverse()) await handle.sync();
-            const namedPayload = await lstat(join(slot.path, 'payload'), { bigint: true });
-            if (!namedPayload.isDirectory() || !sameInode(namedPayload, payload.identity)) invalid('payload directory substituted');
+            await this.persistPublication(handles, slot, payload);
             return { ...spec, storageId: this.storageId(spec), status };
         });
     }
@@ -275,10 +390,37 @@ export class FsGenerationStore {
             record.workspaceId !== spec.workspaceId || record.generationId !== spec.generationId ||
             recordHash?.algorithm !== 'sha256' || recordHash.canonical !== spec.hash ||
             record.sizeBytes !== spec.sizeBytes || record.storageId !== this.storageId(spec)) invalid('durable claim mismatch');
+        return this.removePayload(spec, maxEntries);
+    }
+
+    /** Separate authority for ready-but-uncommitted uploads. Never pretends an
+     * allocation is a verified generation. The persisted readiness identity is
+     * matched before selecting bytes, including on an already-absent retry.
+     */
+    async removeAbandoned(input: FsGenerationSpec & { intentId: string }, claimId: string,
+        coordinator: Pick<ExternalStorageGenerationUploadCoordinatorV1,
+            'version' | 'uploadVersion' | 'storageProviderId' | 'getGenerationUploadClaim'>,
+        maxEntries = 1024): Promise<Removal> {
+        const spec = this.spec(input);
+        if (!UUID.test(input.intentId) || !claimId || !Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 10_000) invalid('invalid abandonment request');
+        if (coordinator?.version !== 1 || coordinator.uploadVersion !== 1 || coordinator.storageProviderId !== 'fs') invalid('coordinator provider mismatch');
+        const intent = await coordinator.getGenerationUploadClaim({ ...spec, intentId: input.intentId, claimId });
+        const hash = intent && parseFsHash(intent.hash);
+        if (!intent || (intent.state !== 'abandon_claimed' && intent.state !== 'abandoned') ||
+            intent.intentId !== input.intentId || intent.claimId !== claimId || intent.storageProviderId !== 'fs' ||
+            intent.workspaceId !== spec.workspaceId || intent.generationId !== spec.generationId ||
+            hash?.algorithm !== 'sha256' || hash.canonical !== spec.hash || intent.sizeBytes !== spec.sizeBytes ||
+            intent.namespaceId !== this.namespaceId || intent.storageId !== this.storageId(spec) ||
+            typeof intent.readyReceiptId !== 'string' || !UUID.test(intent.readyReceiptId)) invalid('durable abandonment claim mismatch');
+        return this.removePayload(spec, maxEntries, intent.readyReceiptId);
+    }
+
+    private async removePayload(spec: FsGenerationSpec, maxEntries: number, readyReceiptId?: string): Promise<Removal> {
         return scoped(async handles => {
             const workspace = await this.workspace(spec, handles);
             const slot = await directory(join(workspace.path, spec.generationId), handles);
             const ready = await this.ready(slot, spec);
+            if (readyReceiptId !== undefined && this.receipt(ready).readyReceiptId !== readyReceiptId) invalid('readiness receipt mismatch');
             let payload: Directory;
             try { payload = await this.payload(slot, ready, handles); }
             catch (error) {
