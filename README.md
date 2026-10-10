@@ -126,6 +126,17 @@ inodes using filesystem block statistics, so hard links are deduplicated within
 this scan; they do not establish exclusive ownership or reclaimable bytes.
 Volume totals describe the entire backing filesystem, not workspace quota.
 Neither these observations nor retained metadata authorize physical cleanup.
+An observed `generations-v1` namespace is explicitly unclassified: its bytes are
+unknown and the filesystem observation is partial, even if legacy paths are empty.
+
+### Dormant generation transfer research
+
+Default-disabled, unregistered upload/download/recovery factories and their
+real-filesystem/SQLite tests are described in
+[the immutable-generation protocol](docs/immutable-generations.md). They do not
+activate physical cleanup. Ready-only recovery, authenticated publication and
+bounded streaming are qualified separately from rollout prerequisites such as
+pre-ready recovery, client retry lookup and mixed legacy reads.
 
 ## Development
 

@@ -87,6 +87,66 @@ afterEach(async () => {
 });
 
 describe('dormant immutable filesystem generations', () => {
+    it('inspects readiness without creating missing slots and preserves its durable receipt across reopen', async () => {
+        expect(await store.inspectAllocation(spec)).toMatchObject({ status: 'incomplete' });
+        expect(await readdir(join(root, 'generations-v1', 'workspaces'))).toEqual([]);
+        await store.allocate(spec);
+        const ready = await store.inspectAllocation(spec);
+        expect(ready.status).toBe('ready');
+        if (ready.status !== 'ready') throw new Error('Missing ready receipt');
+        expect(ready.receipt.readyReceiptId).toMatch(/^[a-f0-9-]{36}$/);
+        expect(ready.receipt).toMatchObject({ ...spec, namespaceId, storageId: store.storageId(spec) });
+        expect(await new FsGenerationStore(root, namespaceId).inspectAllocation(spec)).toEqual(ready);
+        await store.publish(spec, bytes());
+        expect(await store.verifyPublication(spec)).toEqual(ready.receipt);
+        await store.remove(spec, 'claim-one', claimed());
+        expect(await store.inspectAllocation(spec)).toEqual({ status: 'payload_missing', receipt: ready.receipt });
+        await expect(store.verifyPublication(spec)).rejects.toThrow();
+    });
+
+    it('never adopts an old manifest without a durable upload-readiness receipt', async () => {
+        await store.allocate(spec);
+        const manifestPath = join(slot(), 'ready.json');
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+        delete manifest.readyReceiptId;
+        await writeFile(manifestPath, JSON.stringify(manifest));
+        await store.publish(spec, bytes()); // Existing primitive behavior remains intact.
+        await expect(store.inspectAllocation(spec)).rejects.toThrow(/receipt/);
+        await expect(store.verifyPublication(spec)).rejects.toThrow(/receipt/);
+        expect(await readFile(join(slot(), 'payload', 'blob'))).toEqual(data);
+    });
+
+    it('independently verifies published bytes rather than trusting a client receipt or file existence', async () => {
+        await store.allocate(spec);
+        await store.publish(spec, bytes());
+        await writeFile(join(slot(), 'payload', 'blob'), Buffer.alloc(data.length, 0));
+        await expect(store.verifyPublication(spec)).rejects.toThrow(/verification/);
+    });
+
+    it('requires a distinct durable upload-abandonment claim bound to the persisted readiness receipt', async () => {
+        await store.allocate(spec);
+        const inspection = await store.inspectAllocation(spec);
+        if (inspection.status !== 'ready') throw new Error('Not ready');
+        const intentId = randomUUID();
+        const intent = { ...spec, intentId, userId: 'owner', storageProviderId: 'fs', namespaceId,
+            storageId: store.storageId(spec), sizeBytes: spec.sizeBytes, reservedBytes: spec.sizeBytes,
+            mimeType: 'text/plain', purpose: 'upload' as const, createdAt: 1, expiresAt: 2, state: 'abandon_claimed' as const,
+            readyReceiptId: inspection.receipt.readyReceiptId, claimId: 'abandon-one', claimedAt: 3 };
+        const coordinator = { version: 1 as const, uploadVersion: 1 as const, storageProviderId: 'fs',
+            getGenerationUploadClaim: async () => intent };
+        await store.publish(spec, bytes());
+        for (const changed of [{ namespaceId: randomUUID() }, { readyReceiptId: randomUUID() }, { claimId: 'other' },
+            { state: 'ready' as const }, { intentId: randomUUID() }]) {
+            await expect(store.removeAbandoned({ ...spec, intentId }, 'abandon-one', {
+                ...coordinator, getGenerationUploadClaim: async () => ({ ...intent, ...changed }),
+            })).rejects.toThrow();
+        }
+        expect(await readFile(join(slot(), 'payload', 'blob'))).toEqual(data);
+        expect((await store.removeAbandoned({ ...spec, intentId }, 'abandon-one', coordinator)).status).toBe('removed');
+        expect((await store.removeAbandoned({ ...spec, intentId }, 'abandon-one', coordinator)).status).toBe('already_absent');
+        expect((await store.allocate(spec)).status).toBe('payload_missing');
+    });
+
     it('initializes once, publishes verified bytes without overwrite and preserves the permanent slot', async () => {
         expect((await store.allocate(spec)).status).toBe('created');
         expect((await store.allocate(spec)).status).toBe('ready');

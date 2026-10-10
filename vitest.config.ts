@@ -11,6 +11,7 @@ export default defineConfig({
     },
     test: {
         globals: true,
+        setupFiles: ['test/support/deny-outbound.mjs'],
         include: ['src/**/__tests__/**/*.test.ts'],
         exclude: ['node_modules', 'dist'],
         testTimeout: 10000,

@@ -7,7 +7,7 @@
  */
 import type { RuntimeConfigLike } from './runtime-config';
 
-export const useRuntimeConfig: () => RuntimeConfigLike = () => {
+export const useRuntimeConfig: (event?: unknown) => RuntimeConfigLike = () => {
     const runtimeConfig = (
         globalThis as typeof globalThis & {
             useRuntimeConfig?: () => RuntimeConfigLike;
