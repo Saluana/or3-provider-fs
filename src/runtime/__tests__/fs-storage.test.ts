@@ -100,6 +100,111 @@ describe('FsStorageGatewayAdapter', () => {
         });
     });
 
+    describe('upload intent quota lifecycle', () => {
+        it.each(['none', 'reserve-only', 'consume-only'])('fails quota requests closed without complete intent support (%s)', async support => {
+            getActiveSyncGatewayAdapterMock.mockReturnValue({
+                ...(support === 'reserve-only' ? { reserveUploadIntent: vi.fn() } : {}),
+                ...(support === 'consume-only' ? { consumeUploadIntent: vi.fn() } : {}),
+            });
+            await expect(adapter.presignUpload(mockEvent, {
+                workspaceId: 'ws1', hash: HASH_A, mimeType: 'text/plain', sizeBytes: 3, workspaceQuotaBytes: 10,
+            })).rejects.toMatchObject({ statusCode: 503 });
+        });
+
+        it('reserves quota before issuing a URL and consumes before publishing the filesystem commit marker', async () => {
+            const workspaceId = 'ws-intent';
+            const target = resolveFsObjectPath(storageRoot, workspaceId, HASH_A);
+            const marker = getFsObjectMetadataPath(target);
+            const reserveUploadIntent = vi.fn().mockResolvedValue(undefined);
+            const consumeUploadIntent = vi.fn(async () => {
+                await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+            });
+            getActiveSyncGatewayAdapterMock.mockReturnValue({ reserveUploadIntent, consumeUploadIntent });
+            const upload = await adapter.presignUpload(mockEvent, {
+                workspaceId, hash: HASH_A, mimeType: 'text/plain; charset=utf-8', sizeBytes: 3, workspaceQuotaBytes: 10,
+            });
+            expect(upload.intentId).toEqual(expect.any(String));
+            expect(reserveUploadIntent).toHaveBeenCalledWith(mockEvent, {
+                intentId: upload.intentId, workspaceId, hash: HASH_A, mimeType: 'text/plain', sizeBytes: 3,
+                workspaceQuotaBytes: 10, expiresAt: Math.floor(upload.expiresAt! / 1000),
+            });
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'abc');
+            await adapter.commit(mockEvent, {
+                workspace_id: workspaceId, hash: HASH_A, intent_id: upload.intentId,
+                storage_id: upload.storageId, size_bytes: 3, mime_type: 'text/plain; charset=utf-8',
+            });
+            expect(consumeUploadIntent).toHaveBeenCalledWith(mockEvent, {
+                intentId: upload.intentId, workspaceId, hash: HASH_A, mimeType: 'text/plain', sizeBytes: 3,
+                storageId: upload.storageId,
+            });
+            expect(JSON.parse(await readFile(marker, 'utf8'))).toMatchObject({ intent_id: upload.intentId, size_bytes: 3 });
+        });
+
+        it('does not publish a commit sidecar when intent consumption fails, and allows retry', async () => {
+            const workspaceId = 'ws-consume-retry';
+            const target = resolveFsObjectPath(storageRoot, workspaceId, HASH_A);
+            const marker = getFsObjectMetadataPath(target);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'abc');
+            const consumeUploadIntent = vi.fn().mockRejectedValueOnce({ statusCode: 503 }).mockResolvedValue(undefined);
+            getActiveSyncGatewayAdapterMock.mockReturnValue({ reserveUploadIntent: vi.fn(), consumeUploadIntent });
+            const input = { workspace_id: workspaceId, hash: HASH_A, intent_id: 'intent-retry',
+                storage_id: `${workspaceId}:${HASH_A}`, size_bytes: 3, mime_type: 'text/plain' };
+            await expect(adapter.commit(mockEvent, input)).rejects.toMatchObject({ statusCode: 503 });
+            await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+            await adapter.commit(mockEvent, input);
+            expect(JSON.parse(await readFile(marker, 'utf8')).intent_id).toBe('intent-retry');
+        });
+
+        it('retries a local sidecar write failure after successful idempotent intent consumption', async () => {
+            const workspaceId = 'ws-marker-retry';
+            const target = resolveFsObjectPath(storageRoot, workspaceId, HASH_A);
+            const marker = getFsObjectMetadataPath(target);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'abc');
+            await mkdir(marker);
+            const consumeUploadIntent = vi.fn().mockResolvedValue(undefined);
+            getActiveSyncGatewayAdapterMock.mockReturnValue({ reserveUploadIntent: vi.fn(), consumeUploadIntent });
+            const input = { workspace_id: workspaceId, hash: HASH_A, intent_id: 'intent-marker',
+                storage_id: `${workspaceId}:${HASH_A}`, size_bytes: 3, mime_type: 'text/plain' };
+            await expect(adapter.commit(mockEvent, input)).rejects.toBeDefined();
+            expect(consumeUploadIntent).toHaveBeenCalledTimes(1);
+            await rm(marker, { recursive: true });
+            await adapter.commit(mockEvent, input);
+            expect(consumeUploadIntent).toHaveBeenCalledTimes(2);
+            expect(JSON.parse(await readFile(marker, 'utf8')).intent_id).toBe('intent-marker');
+        });
+
+        it.each(['missing_intent', 'storage_id', 'size'])('rejects an invalid commit before consuming or publishing (%s)', async invalid => {
+            const workspaceId = `ws-invalid-${invalid}`;
+            const target = resolveFsObjectPath(storageRoot, workspaceId, HASH_A);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, 'abc');
+            const consumeUploadIntent = vi.fn();
+            getActiveSyncGatewayAdapterMock.mockReturnValue({ reserveUploadIntent: vi.fn(), consumeUploadIntent });
+            await expect(adapter.commit(mockEvent, {
+                workspace_id: workspaceId, hash: HASH_A, intent_id: invalid === 'missing_intent' ? undefined : 'intent',
+                storage_id: invalid === 'storage_id' ? 'other-workspace:object' : `${workspaceId}:${HASH_A}`,
+                size_bytes: invalid === 'size' ? 4 : 3, mime_type: 'text/plain',
+            })).rejects.toMatchObject({ statusCode: 400 });
+            expect(consumeUploadIntent).not.toHaveBeenCalled();
+            await expect(readFile(getFsObjectMetadataPath(target))).rejects.toMatchObject({ code: 'ENOENT' });
+        });
+
+        it('releases its reservation if token signing fails', async () => {
+            const reserveUploadIntent = vi.fn(async (_event: H3Event, _input: { intentId: string }) => { delete process.env.OR3_STORAGE_FS_TOKEN_SECRET; });
+            const cancelUploadIntent = vi.fn().mockResolvedValue(undefined);
+            getActiveSyncGatewayAdapterMock.mockReturnValue({ reserveUploadIntent, consumeUploadIntent: vi.fn(), cancelUploadIntent });
+            await expect(adapter.presignUpload(mockEvent, {
+                workspaceId: 'ws1', hash: HASH_A, mimeType: 'text/plain', sizeBytes: 3, workspaceQuotaBytes: 10,
+            })).rejects.toThrow('Missing OR3_STORAGE_FS_TOKEN_SECRET');
+            expect(cancelUploadIntent).toHaveBeenCalledWith(mockEvent, {
+                workspaceId: 'ws1', intentId: reserveUploadIntent.mock.calls[0]?.[1]?.intentId,
+            });
+        });
+    });
+
     describe('presignDownload', () => {
         it('rejects an uploaded blob that has not crossed the commit sidecar boundary', async () => {
             const objectPath = resolveFsObjectPath(storageRoot, 'ws2-pending', HASH_B);

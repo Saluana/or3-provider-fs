@@ -405,7 +405,7 @@ describe('fs upload/download handlers', () => {
         utimesSync(objectPath, staleTime, staleTime);
         utimesSync(metadataPath, staleTime, staleTime);
 
-        getActiveSyncGatewayAdapterMock.mockReturnValueOnce({
+        getActiveSyncGatewayAdapterMock.mockClear().mockReturnValueOnce({
             pull: vi.fn().mockResolvedValue({
                 changes: [
                     {

@@ -101,8 +101,47 @@ without deleting bytes or querying canonical state. Logical Trash/removal retain
 the original bytes. Independent canonical scans cannot prevent a concurrent
 restore or reference write.
 
-GC runs per workspace via the provider admin action `storage.gc` (default retention
-30 days, `retentionDays`/`retentionSeconds` and `limit` accepted in the action payload).
+The provider admin action `storage.gc` reports this disabled status for every sync
+backend; canonical read support does not enable physical deletion.
+
+## Usage Accounting
+
+The System provider action **Observe Storage Usage** (`storage.usage`) reports
+logical active/deleted metadata and upload reservations separately from observed
+filesystem bytes. It distinguishes active blobs, retained deleted blobs, incomplete
+transfers, sidecars, and unclassified files. Allocation deduplicates hard-linked
+inodes; volume totals describe the containing filesystem, not workspace quota.
+It never deletes bytes or returns deletion candidates.
+
+The result has `consistency: "non_atomic_observation"`, start/end timestamps,
+completion flags, and warnings. Canonical totals become `null` when unavailable,
+malformed, or incomplete. Deleted metadata with unknown size also stays `null`.
+Retained accounting requires sync capability `retainedStorageMetadata: 'v1'`;
+older providers are not probed for unsupported queries. Blob classification requires
+matching canonical filesystem storage IDs. Missing legacy IDs, IDs for another
+provider/workspace, and ambiguous ownership stay unclassified with warnings. Filesystem totals are observed values even when the scan is
+partial; inspect `filesystem.complete` before interpreting them as a full scan.
+
+Each canonical view is bounded to 100 pages of at most 250 records. The directory
+scan is bounded to 10,000 entries; an action payload `limit` can lower that bound.
+No recursion or symlink traversal is performed. Directory metadata, databases,
+and other workspaces are outside the file totals.
+
+## Upload Quota Reservations
+
+When the sync provider supports both `reserveUploadIntent` and
+`consumeUploadIntent`, presigning reserves bytes atomically and returns an
+`intentId`; pass it back to the host commit endpoint as `intent_id`. Commit checks
+the object size and scoped storage ID, consumes the matching intent, then writes
+the sidecar. Exact intent consumption can be retried after a failed sidecar write
+within the original authorization lifetime with the matching current sync
+provider. After expiry, re-presign and upload with a fresh reservation. Signing failures release reservations
+when cancellation is supported; abandoned uploads expire.
+
+A configured hard workspace quota fails with HTTP 503 if the sync provider lacks
+the complete reservation/consumption pair. Without a quota, older sync providers
+can still use the original upload/commit flow. Logical metadata and pending
+reservations determine quota; retained filesystem bytes do not.
 
 ## Development
 
@@ -132,11 +171,6 @@ generator from its pinned host revision before qualification and publication.
 | `Content type mismatch` (415) | Upload `Content-Type` differs from the token's `mime_type` | Send the declared `Content-Type` |
 | `Storage root must be absolute` | `OR3_STORAGE_FS_ROOT` is a relative path | Set an absolute path |
 
-## v2 TODOs
-
-- [x] Set `Content-Type` on downloads from the token's mime claim (done — with `application/octet-stream` fallback)
-- [ ] Use `.meta.json` sidecars to avoid directory scans during GC (sidecars are now written on commit and removed on delete, but GC still enumerates the workspace directory)
-
 ## Compatibility
 
 Works with any auth/sync provider combo. Tested against `or3-provider-basic-auth` + `or3-provider-sqlite` and `or3-provider-clerk` + `or3-provider-convex` stacks.
@@ -150,7 +184,3 @@ prints its selected path; restart it after provider edits. Missing repositories
 or failed builds fall back to installed packages with a warning.
 `OR3_LOCAL_PROVIDERS=false` disables local selection. Production builds use the
 installed package, so local development does not publish these changes.
-
-## Physical deletion coordination
-
-Filesystem unlink and GC fail closed until a cross-backend deletion claim protocol exists. Independent canonical scans cannot prevent a restore/reference race. Existing physical objects return 503 from delete; GC reports disabled with `deletion_coordination_required`. Logical Files Trash/removal retains the bytes.

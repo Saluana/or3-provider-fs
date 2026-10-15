@@ -6,8 +6,8 @@
  */
 import type { H3Event } from 'h3';
 import { createError } from 'h3';
-import { access, mkdir, rename, stat, unlink, writeFile, constants } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { access, rename, unlink, writeFile, constants } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type {
     StorageGatewayAdapter,
     PresignUploadRequest,
@@ -18,10 +18,12 @@ import type {
 } from '~~/server/storage/gateway/types';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
+import { getActiveSyncGatewayAdapter } from '~~/server/sync/gateway/registry';
 import { resolveFsUrlTtlSeconds } from './fs-config';
 import {
     assertValidWorkspaceId,
     getFsObjectMetadataPath,
+    openFsObjectForDownload,
     resolveFsObjectPath,
 } from './fs-paths';
 import { requireFsHash } from './fs-hash';
@@ -109,6 +111,10 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         input: PresignUploadRequest,
     ): Promise<PresignUploadResponse> {
         requireFsHash(input.hash);
+        assertValidWorkspaceId(input.workspaceId);
+        if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0) {
+            throw createError({ statusCode: 400, statusMessage: 'Upload size must be a nonnegative safe integer' });
+        }
 
         const session = await resolveSessionContext(event);
         if (!session.authenticated || !session.user) {
@@ -120,24 +126,44 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         });
 
         const ttl = resolveFsUrlTtlSeconds();
-        const token = signFsToken(
-            {
-                op: 'upload',
-                workspace_id: input.workspaceId,
-                user_id: session.user.id,
-                hash: input.hash,
-                mime_type: input.mimeType,
-                size_bytes: input.sizeBytes,
-            },
-            ttl,
-        );
-
-        return {
-            url: `/api/storage/fs/upload?token=${encodeURIComponent(token)}`,
-            method: 'PUT',
-            expiresAt: Date.now() + ttl * 1000,
-            storageId: `${input.workspaceId}:${input.hash}`,
-        };
+        const expiresAt = Date.now() + ttl * 1000;
+        const sync = getActiveSyncGatewayAdapter();
+        const supportsIntents = Boolean(sync?.reserveUploadIntent && sync.consumeUploadIntent);
+        if (!supportsIntents && (input.workspaceQuotaBytes !== undefined || sync?.reserveUploadIntent || sync?.consumeUploadIntent)) {
+            throw createError({ statusCode: 503, statusMessage: 'Atomic upload quota reservations require sync-provider support' });
+        }
+        const intentId = supportsIntents ? randomUUID() : undefined;
+        const mimeType = input.mimeType.split(';', 1)[0]!.trim().toLowerCase();
+        if (intentId) {
+            await sync!.reserveUploadIntent!(event, {
+                intentId, workspaceId: input.workspaceId, hash: input.hash,
+                mimeType, sizeBytes: input.sizeBytes, expiresAt: Math.floor(expiresAt / 1000),
+                workspaceQuotaBytes: input.workspaceQuotaBytes,
+            });
+        }
+        try {
+            const token = signFsToken(
+                {
+                    op: 'upload',
+                    workspace_id: input.workspaceId,
+                    user_id: session.user.id,
+                    hash: input.hash,
+                    mime_type: mimeType,
+                    size_bytes: input.sizeBytes,
+                },
+                ttl,
+            );
+            return {
+                url: `/api/storage/fs/upload?token=${encodeURIComponent(token)}`,
+                method: 'PUT', expiresAt, storageId: `${input.workspaceId}:${input.hash}`,
+                ...(intentId ? { intentId } : {}),
+            };
+        } catch (error) {
+            if (intentId && sync?.cancelUploadIntent) {
+                await sync.cancelUploadIntent(event, { workspaceId: input.workspaceId, intentId }).catch(() => undefined);
+            }
+            throw error;
+        }
     }
 
     async presignDownload(
@@ -197,12 +223,12 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         };
     }
 
-    async commit(_event: H3Event, input: unknown): Promise<void> {
+    async commit(event: H3Event, input: unknown): Promise<void> {
         if (!input || typeof input !== 'object') {
             throw createError({ statusCode: 400, statusMessage: 'Invalid commit input' });
         }
 
-        const body = input as { workspace_id?: unknown; hash?: unknown };
+        const body = input as Record<string, unknown>;
         if (typeof body.workspace_id !== 'string' || typeof body.hash !== 'string') {
             throw createError({ statusCode: 400, statusMessage: 'Invalid commit input' });
         }
@@ -215,27 +241,56 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             throw createError({ statusCode: 400, statusMessage: 'Invalid path parameters' });
         }
 
+        const storageId = `${body.workspace_id}:${body.hash}`;
+        if (body.storage_id !== undefined && body.storage_id !== storageId) {
+            throw createError({ statusCode: 400, statusMessage: 'storage_id does not match expected filesystem object' });
+        }
+        const sync = getActiveSyncGatewayAdapter();
+        const supportsIntents = Boolean(sync?.reserveUploadIntent && sync.consumeUploadIntent);
+        if (!supportsIntents && (body.intent_id !== undefined || sync?.reserveUploadIntent || sync?.consumeUploadIntent)) {
+            throw createError({ statusCode: 503, statusMessage: 'Upload intent consumption requires sync-provider support' });
+        }
+        if (supportsIntents && (
+            typeof body.intent_id !== 'string' || !body.intent_id.trim() ||
+            body.storage_id !== storageId ||
+            typeof body.mime_type !== 'string' || !body.mime_type.trim() ||
+            typeof body.size_bytes !== 'number' || !Number.isSafeInteger(body.size_bytes) || body.size_bytes < 0
+        )) {
+            throw createError({ statusCode: 400, statusMessage: 'Invalid upload intent commit' });
+        }
+        let size: number;
         try {
-            await access(objectPath, constants.F_OK);
+            const file = await openFsObjectForDownload(root, objectPath);
+            try { size = (await file.stat()).size; } finally { await file.close(); }
         } catch {
             throw createError({ statusCode: 404, statusMessage: 'Uploaded file not found' });
         }
-
+        if (body.size_bytes !== undefined && body.size_bytes !== size) {
+            throw createError({ statusCode: 400, statusMessage: 'Uploaded object size mismatch' });
+        }
+        const mimeType = typeof body.mime_type === 'string' ? body.mime_type.split(';', 1)[0]!.trim().toLowerCase() : undefined;
+        // Consumption must succeed before publishing a new commit marker.
+        // The sync backend accepts an exact consumed tuple again, so a local
+        // sidecar write failure can be retried without freeing quota early.
+        if (supportsIntents) {
+            await sync!.consumeUploadIntent!(event, {
+                intentId: body.intent_id as string, workspaceId: body.workspace_id,
+                hash: body.hash, mimeType: mimeType!, sizeBytes: size, storageId,
+            });
+        }
         const metadataPath = getFsObjectMetadataPath(objectPath);
-        const metadata = JSON.stringify(
-            {
-                workspace_id: body.workspace_id,
-                hash: body.hash,
-                committed_at: new Date().toISOString(),
-            },
-            null,
-            0,
-        );
-
-        const tempMetadataPath = `${metadataPath}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        await mkdir(dirname(metadataPath), { recursive: true });
-        await writeFile(tempMetadataPath, metadata, { encoding: 'utf8' });
-        await rename(tempMetadataPath, metadataPath);
+        const metadata = JSON.stringify({
+            workspace_id: body.workspace_id, hash: body.hash, storage_id: storageId,
+            committed_at: new Date().toISOString(), size_bytes: size, mime_type: mimeType,
+            ...(supportsIntents ? { intent_id: body.intent_id } : {}),
+        });
+        const tempMetadataPath = `${metadataPath}.tmp-${randomUUID()}`;
+        try {
+            await writeFile(tempMetadataPath, metadata, { encoding: 'utf8', flag: 'wx' });
+            await rename(tempMetadataPath, metadataPath);
+        } finally {
+            await unlink(tempMetadataPath).catch(() => undefined);
+        }
     }
 
     async deleteObject(_event: H3Event, input: DeleteObjectRequest): Promise<void> {
