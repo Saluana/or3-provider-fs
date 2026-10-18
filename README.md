@@ -81,6 +81,12 @@ $OR3_STORAGE_FS_ROOT/
 - **Safe downloads**: generic or active content is returned as an `application/octet-stream` attachment with `X-Content-Type-Options: nosniff`; only supported raster images and PDFs may remain inline.
 - **Symlink-safe downloads**: downloads resolve the real path and open with `O_NOFOLLOW`, rejecting anything that escapes the storage root.
 
+## Browser cache and workspace backups
+
+The host’s admin dashboard controls per-workspace upload and browser-cache limits. Large selected files can upload directly through this provider without IndexedDB persistence. Cache cleanup removes only verified redundant browser bytes; filesystem originals and commit sidecars are unaffected. Unknown local originals and unfinished uploads remain protected.
+
+The host’s Cloud workspace export streams a consistent canonical snapshot plus original binary files from this provider into `.or3cloud`. Restore verifies the archive and creates a fresh workspace through the existing upload reservation/commit and sync contracts. Operator deployment backups remain separate; see below for filesystem backup requirements.
+
 ## Backup
 
 The storage root is a plain directory tree. Back it up with any tool:
