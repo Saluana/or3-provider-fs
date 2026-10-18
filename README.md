@@ -106,7 +106,27 @@ backend; canonical read support does not enable physical deletion.
 
 ## Usage Accounting
 
-The System provider action **Observe Storage Usage** (`storage.usage`) reports
+OR3 Chat's admin Overview and Operations pages explain retained Trash files with
+the informational notice **Deleted files still use storage**. **View storage
+usage** opens the workspace chooser immediately in Operations when the provider
+supports it, from either notice. Select a workspace to inspect; canceling the
+chooser does not run the action and you can reopen it from the same notice.
+Results are brought into view, receive keyboard focus, name the selected workspace,
+and preserve scan limits and uncertainty. The notice's
+**Technical details** retains the provider diagnostic. No setting enables
+permanent cleanup, and this action does not empty Trash.
+
+The result summary shows readable active-file and Trash sizes from metadata,
+observed workspace file sizes on disk (including Trash and supporting files), and
+available space on the shared server filesystem. Unknown totals are omitted with
+a clear message; partial disk totals are labeled. **Show JSON** starts collapsed
+and exposes the full response, including completion flags and warnings.
+
+Under **Operations → Maintenance**, **File cleanup status** (`storage.gc`)
+explains that permanent cleanup is unavailable and the check does not delete
+files. Card descriptions wrap fully, including on narrow screens.
+
+The **Storage usage** action (`storage.usage`) reports
 logical active/deleted metadata and upload reservations separately from observed
 filesystem bytes. It distinguishes active blobs, retained deleted blobs, incomplete
 transfers, sidecars, and unclassified files. Allocation deduplicates hard-linked
