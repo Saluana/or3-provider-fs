@@ -61,13 +61,13 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
             actions: [
                 {
                     id: 'storage.gc',
-                    label: 'Check Storage GC Status',
-                    description: 'Reports that destructive GC is disabled; does not scan sync history or delete files.',
+                    label: 'File cleanup status',
+                    description: 'Permanent file cleanup is not available yet. This check does not delete any files.',
                 },
                 {
                     id: 'storage.usage',
-                    label: 'Observe Storage Usage',
-                    description: 'Reports bounded, read-only canonical and filesystem usage. Does not reclaim bytes or identify deletion candidates.',
+                    label: 'Storage usage',
+                    description: 'See how much space a workspace uses, including files in Trash. This check does not delete files or free up space.',
                 },
             ],
         };

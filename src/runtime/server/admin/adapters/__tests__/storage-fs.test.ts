@@ -72,8 +72,8 @@ describe('fsStorageAdminAdapter', () => {
         if (queries) useCanonical({});
         const result = await fsStorageAdminAdapter.getStatus({} as H3Event, { enabled: true, provider: 'fs' });
         expect(result.details).toMatchObject({ gcStatus: 'disabled', gcDisabledReason: 'deletion_coordination_required' });
-        expect(result.actions).toContainEqual(expect.objectContaining({ id: 'storage.gc', label: 'Check Storage GC Status' }));
-        expect(result.actions).toContainEqual(expect.objectContaining({ id: 'storage.usage', label: 'Observe Storage Usage' }));
+        expect(result.actions).toContainEqual(expect.objectContaining({ id: 'storage.gc', label: 'File cleanup status' }));
+        expect(result.actions).toContainEqual(expect.objectContaining({ id: 'storage.usage', label: 'Storage usage' }));
         expect(await fsStorageAdminAdapter.runAction!({} as H3Event, 'storage.gc', undefined, context))
             .toMatchObject({ deleted_count: 0, status: 'disabled', reason: 'deletion_coordination_required' });
     });

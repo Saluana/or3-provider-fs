@@ -81,6 +81,12 @@ $OR3_STORAGE_FS_ROOT/
 - **Safe downloads**: generic or active content is returned as an `application/octet-stream` attachment with `X-Content-Type-Options: nosniff`; only supported raster images and PDFs may remain inline.
 - **Symlink-safe downloads**: downloads resolve the real path and open with `O_NOFOLLOW`, rejecting anything that escapes the storage root.
 
+## Browser cache and workspace backups
+
+The host’s admin dashboard controls per-workspace upload and browser-cache limits. Large selected files can upload directly through this provider without IndexedDB persistence. Cache cleanup removes only verified redundant browser bytes; filesystem originals and commit sidecars are unaffected. Unknown local originals and unfinished uploads remain protected.
+
+The host’s Cloud workspace export streams a consistent canonical snapshot plus original binary files from this provider into `.or3cloud`. Restore verifies the archive and creates a fresh workspace through the existing upload reservation/commit and sync contracts. Operator deployment backups remain separate; see below for filesystem backup requirements.
+
 ## Backup
 
 The storage root is a plain directory tree. Back it up with any tool:
@@ -106,7 +112,27 @@ backend; canonical read support does not enable physical deletion.
 
 ## Usage Accounting
 
-The System provider action **Observe Storage Usage** (`storage.usage`) reports
+OR3 Chat's admin Overview and Operations pages explain retained Trash files with
+the informational notice **Deleted files still use storage**. **View storage
+usage** opens the workspace chooser immediately in Operations when the provider
+supports it, from either notice. Select a workspace to inspect; canceling the
+chooser does not run the action and you can reopen it from the same notice.
+Results are brought into view, receive keyboard focus, name the selected workspace,
+and preserve scan limits and uncertainty. The notice's
+**Technical details** retains the provider diagnostic. No setting enables
+permanent cleanup, and this action does not empty Trash.
+
+The result summary shows readable active-file and Trash sizes from metadata,
+observed workspace file sizes on disk (including Trash and supporting files), and
+available space on the shared server filesystem. Unknown totals are omitted with
+a clear message; partial disk totals are labeled. **Show JSON** starts collapsed
+and exposes the full response, including completion flags and warnings.
+
+Under **Operations → Maintenance**, **File cleanup status** (`storage.gc`)
+explains that permanent cleanup is unavailable and the check does not delete
+files. Card descriptions wrap fully, including on narrow screens.
+
+The **Storage usage** action (`storage.usage`) reports
 logical active/deleted metadata and upload reservations separately from observed
 filesystem bytes. It distinguishes active blobs, retained deleted blobs, incomplete
 transfers, sidecars, and unclassified files. Allocation deduplicates hard-linked
