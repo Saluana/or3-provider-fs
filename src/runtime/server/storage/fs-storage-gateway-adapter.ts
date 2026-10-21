@@ -26,7 +26,7 @@ import {
     openFsObjectForDownload,
     resolveFsObjectPath,
 } from './fs-paths';
-import { requireFsHash } from './fs-hash';
+import { createFsHashDigestVerifier, requireFsHash } from './fs-hash';
 import { signFsToken } from './fs-token';
 
 const SAFE_INLINE_MIME_TYPES = new Set([
@@ -105,6 +105,10 @@ function parseGcInput(input: unknown): { workspaceId: string; retentionSeconds: 
 
 export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
     id = 'fs';
+
+    get atomicUploadQuota() {
+        return getActiveSyncGatewayAdapter()?.capabilities?.atomicUploadQuota;
+    }
 
     async presignUpload(
         event: H3Event,
@@ -196,6 +200,21 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             throw createError({ statusCode: 404, statusMessage: 'File not found' });
         }
 
+        let verifiedContent: PresignDownloadResponse['verifiedContent'];
+        if (input.verifyContent) {
+            const file = await openFsObjectForDownload(root, objectPath);
+            try {
+                const verifier = createFsHashDigestVerifier(parsedHash.canonical);
+                let sizeBytes = 0;
+                for await (const chunk of file.createReadStream({ autoClose: false })) {
+                    sizeBytes += chunk.length;
+                    verifier.update(chunk);
+                }
+                if (!verifier.finalize()) throw createError({ statusCode: 409, statusMessage: 'Stored file checksum mismatch' });
+                verifiedContent = { hash: parsedHash.canonical, sizeBytes };
+            } finally { await file.close(); }
+        }
+
         const ttl = resolveFsUrlTtlSeconds();
         const token = signFsToken(
             {
@@ -216,6 +235,7 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
         );
 
         return {
+            ...(verifiedContent ? { verifiedContent } : {}),
             url: `/api/storage/fs/download?token=${encodeURIComponent(token)}`,
             method: 'GET',
             expiresAt: Date.now() + ttl * 1000,

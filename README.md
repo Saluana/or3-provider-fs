@@ -166,8 +166,13 @@ when cancellation is supported; abandoned uploads expire.
 
 A configured hard workspace quota fails with HTTP 503 if the sync provider lacks
 the complete reservation/consumption pair. Without a quota, older sync providers
-can still use the original upload/commit flow. Logical metadata and pending
-reservations determine quota; retained filesystem bytes do not.
+can still use the original upload/commit flow. With an updated SQLite or Convex sync backend, the storage adapter delegates
+`atomicUploadQuota: 'retained-v1'`: committed hashes remain charged after Trash,
+logical deletion and intent expiry. Same-hash restores do not double-charge.
+The host can skip its catalog preflight only with that capability. Configure
+`OR3_STORAGE_WORKSPACE_QUOTA_BYTES` explicitly; the existing default is unlimited.
+Physical cleanup remains disabled, and incomplete/unclassified bytes can exist
+outside admission accounting.
 
 ## Development
 
@@ -210,3 +215,13 @@ prints its selected path; restart it after provider edits. Missing repositories
 or failed builds fall back to installed packages with a warning.
 `OR3_LOCAL_PROVIDERS=false` disables local selection. Production builds use the
 installed package, so local development does not publish these changes.
+
+## Browser cache redundancy proofs
+
+When presign-download requests `verify_content: true`, the adapter securely opens
+the exact committed original with the existing no-symlink checks and streams its
+SHA-256 on the server. An exact match returns `verifiedContent: { hash, sizeBytes }`
+with the canonical storage ID. The browser can release a redundant cached copy
+without transferring the original again. Corruption returns an error and keeps
+the local copy. Normal presigning avoids this hash pass; authorization and
+physical deletion restrictions are unchanged.
