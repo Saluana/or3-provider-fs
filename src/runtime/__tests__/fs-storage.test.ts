@@ -206,6 +206,21 @@ describe('FsStorageGatewayAdapter', () => {
     });
 
     describe('presignDownload', () => {
+        // Proofs must hash the actual committed file, not echo the sidecar/key.
+        it('attests the current original and refuses a corrupted committed file', async () => {
+            const hash = 'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+            const objectPath = resolveFsObjectPath(storageRoot, 'ws-proof', hash);
+            await mkdir(dirname(objectPath), { recursive: true });
+            await writeFile(objectPath, 'abc');
+            await writeFile(getFsObjectMetadataPath(objectPath), '{}');
+            const input = { workspaceId: 'ws-proof', hash, verifyContent: true };
+            expect(await adapter.presignDownload(mockEvent, input)).toMatchObject({
+                verifiedContent: { hash, sizeBytes: 3 },
+            });
+            await writeFile(objectPath, 'bad');
+            await expect(adapter.presignDownload(mockEvent, input)).rejects.toBeDefined();
+        });
+
         it('rejects an uploaded blob that has not crossed the commit sidecar boundary', async () => {
             const objectPath = resolveFsObjectPath(storageRoot, 'ws2-pending', HASH_B);
             await mkdir(dirname(objectPath), { recursive: true });
