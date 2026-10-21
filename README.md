@@ -2,6 +2,8 @@
 
 Filesystem storage provider for [OR3 Chat](https://github.com/or3-chat/or3-chat) — local-disk blob storage via signed tokens.
 
+Requires **Node.js 24.22.1 or newer on the 24.x line**, matching OR3 Chat. Development and CI pin **24.22.1** in `.node-version`.
+
 ## What It Does
 
 Registers a `StorageGatewayAdapter` (ID: `fs`) that stores uploaded files on the local filesystem. The existing client `FileTransferQueue` works unchanged — presign endpoints return signed internal URLs that the upload/download handlers verify.
