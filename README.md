@@ -8,7 +8,11 @@ Requires **Node.js 24.22.1 or newer on the 24.x line**, matching OR3 Chat. Devel
 
 Registers a `StorageGatewayAdapter` (ID: `fs`) that stores uploaded files on the local filesystem. The existing client `FileTransferQueue` works unchanged — presign endpoints return signed internal URLs that the upload/download handlers verify.
 
-**This is a storage-only provider.** It does not provide auth or sync. Pair it with `or3-provider-basic-auth` + `or3-provider-sqlite` (or Clerk + Convex) for a complete stack.
+**This is a storage-only provider.** It does not provide auth or sync. Pair it with `or3-provider-basic-auth` + `or3-provider-sqlite` or `or3-provider-convex` (or Clerk + Convex) for a complete stack.
+
+The host can queue small originals offline after loading the workspace's file
+settings in the current app session. Filesystem uploads resume on reconnect and
+still enforce the server's current policy.
 
 The adapter only registers when auth and storage are enabled and `fs` is the active storage provider (e.g. `SSR_AUTH_ENABLED=true`, `OR3_STORAGE_ENABLED=true`, `NUXT_PUBLIC_STORAGE_PROVIDER=fs`). Otherwise registration is skipped with a startup warning.
 
