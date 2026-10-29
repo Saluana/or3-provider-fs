@@ -208,8 +208,24 @@ export async function observeFsStorageUsage(
         unclassifiedBytes: 0,
         apparentFileBytes: 0,
         allocatedFileBytes: 0 as number | null,
+        generationNamespaceBytes: 0 as number | null,
         orphanSidecarCount: 0 as number | null,
     };
+    // This observer only understands the legacy workspace layout. A bounded
+    // existence check must not silently call a generation-only root empty or
+    // complete. Do not recurse, follow links or invent a physical byte total.
+    try {
+        await lstat(join(resolvedRoot, 'generations-v1'));
+        filesystem.complete = false;
+        filesystem.generationNamespaceBytes = null;
+        warnings.add('generation_namespace_unclassified');
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            filesystem.complete = false;
+            filesystem.generationNamespaceBytes = null;
+            warnings.add('generation_namespace_unreadable');
+        }
+    }
     const files = new Map<string, number>();
     const inodes = new Set<string>();
     if (!workspaceMissing) {

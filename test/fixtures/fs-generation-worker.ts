@@ -1,4 +1,5 @@
 /** Actual child-process actor for filesystem race/crash tests. No fake I/O. */
+import '../support/deny-outbound.mjs';
 import { createInterface } from 'node:readline';
 import { FsGenerationStore, type FsGenerationSpec } from '../../src/runtime/server/storage/fs-generations';
 

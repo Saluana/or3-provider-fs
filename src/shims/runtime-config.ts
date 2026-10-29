@@ -1,4 +1,5 @@
 export interface RuntimeConfigLike {
+    security: { proxy: { trustProxy?: boolean }; allowedOrigins: string[] };
     auth: {
         enabled?: boolean;
         strict?: boolean;
@@ -20,13 +21,13 @@ export interface RuntimeConfigLike {
             provider?: string;
             [key: string]: unknown;
         };
-        sync?: {
+        sync: {
             provider?: string;
             [key: string]: unknown;
         };
         [key: string]: unknown;
     };
-    sync?: {
+    sync: {
         provider?: string;
         [key: string]: unknown;
     };

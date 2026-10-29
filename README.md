@@ -235,3 +235,7 @@ with the canonical storage ID. The browser can release a redundant cached copy
 without transferring the original again. Corruption returns an error and keeps
 the local copy. Normal presigning avoids this hash pass; authorization and
 physical deletion restrictions are unchanged.
+
+### Dormant generation transfers
+
+Default-disabled, unregistered upload/download/recovery factories are described in [the immutable-generation protocol](docs/immutable-generations.md). Physical cleanup remains disabled. The experimental generation-aware observer is separate from the existing `storage.usage` admin response.

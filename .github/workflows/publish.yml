@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Saluana/or3-provider-sqlite
-          ref: c9d90e6202b84e476104aa33999b9943aa0696ee
+          ref: 7b559d132fc4d7bd4714aeaeff991dab5a25d443
           path: sqlite
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

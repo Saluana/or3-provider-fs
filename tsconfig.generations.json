@@ -1,4 +1,4 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["integration/**/*.ts", "test/**/*.ts", "src/runtime/server/storage/fs-generations.ts"]
+  "include": ["integration/**/*.ts", "test/**/*.ts", "src/runtime/server/storage/fs-generations.ts", "src/nuxt-env.d.ts"]
 }
