@@ -15,15 +15,20 @@ import hostPresignUpload from '~~/server/api/storage/presign-upload.post';
 import hostCommit from '~~/server/api/storage/commit.post';
 import hostPresignDownload from '~~/server/api/storage/presign-download.post';
 import { resetSyncRateLimits } from '~~/server/utils/sync/rate-limiter';
+import { registerAuthWorkspaceStore } from '~~/server/auth/store/registry';
+import { registerAdminStoreProvider } from '~~/server/admin/stores/registry';
 import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb, type SqliteRawDatabase } from '../../sqlite/src/runtime/server/db/kysely';
 import { runMigrations } from '../../sqlite/src/runtime/server/db/migrate';
+import { SqliteAuthWorkspaceStore } from '../../sqlite/src/runtime/server/auth/sqlite-auth-workspace-store';
+import { createSqliteWorkspaceAccessStore, createSqliteWorkspaceSettingsStore, createSqliteAdminUserStore } from '../../sqlite/src/runtime/server/admin/stores/sqlite-store';
 import { SqliteExternalStorageGenerationUploadCoordinator } from '../../sqlite/src/runtime/server/storage/sqlite-generation-upload-coordinator';
 import { SqliteSyncGatewayAdapter } from '../../sqlite/src/runtime/server/sync/sqlite-sync-gateway-adapter';
 import { FsGenerationStore } from '../src/runtime/server/storage/fs-generations';
 import { createFsGenerationGateway } from '../src/runtime/server/storage/fs-generation-gateway';
 import { createFsGenerationTokenCodec } from '../src/runtime/server/storage/fs-generation-token';
 
-vi.mock('~~/server/auth/session', () => ({
+vi.mock('~~/server/auth/session', async importOriginal => ({
+    ...await importOriginal<typeof import('~~/server/auth/session')>(),
     resolveSessionContext: vi.fn(async (event: H3Event) => {
         const id = getHeader(event, 'x-test-user') ?? 'owner';
         return { authenticated: id !== 'anonymous', user: { id },
@@ -97,7 +102,14 @@ beforeEach(async () => {
     namespaceId = randomUUID();
     const db = await initializeSqliteDb({ path: join(directory, 'db.sqlite'), driver: 'bun', journalMode: 'WAL', synchronous: 'FULL' });
     await runMigrations(db); raw = getRawDb();
-    vi.stubGlobal('useRuntimeConfig', () => ({ auth: { enabled: true }, storage: { enabled: true }, public: {},
+    raw.prepare('INSERT INTO users (id) VALUES (?)').run('owner');
+    raw.prepare('INSERT INTO workspaces (id, name, owner_user_id) VALUES (?, ?, ?)').run('workspace', 'Workspace', 'owner');
+    raw.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run('membership', 'workspace', 'owner', 'owner');
+    registerAuthWorkspaceStore({ id: 'sqlite', create: () => new SqliteAuthWorkspaceStore() });
+    registerAdminStoreProvider({ id: 'sqlite', createWorkspaceAccessStore: createSqliteWorkspaceAccessStore,
+        createWorkspaceSettingsStore: createSqliteWorkspaceSettingsStore, createAdminUserStore: createSqliteAdminUserStore });
+    vi.stubGlobal('useRuntimeConfig', () => ({ auth: { enabled: true }, storage: { enabled: true },
+        sync: { provider: 'sqlite' }, public: { sync: { provider: 'sqlite' } },
         security: { proxy: { trustProxy: false }, allowedOrigins: [] } }));
     coordinator = new SqliteExternalStorageGenerationUploadCoordinator({ storageProviderId: 'fs' });
     sync = new SqliteSyncGatewayAdapter();
