@@ -2,11 +2,17 @@
 
 Filesystem storage provider for [OR3 Chat](https://github.com/or3-chat/or3-chat) — local-disk blob storage via signed tokens.
 
+Requires **Node.js 24.22.1 or newer on the 24.x line**, matching OR3 Chat. Development and CI pin **24.22.1** in `.node-version`.
+
 ## What It Does
 
 Registers a `StorageGatewayAdapter` (ID: `fs`) that stores uploaded files on the local filesystem. The existing client `FileTransferQueue` works unchanged — presign endpoints return signed internal URLs that the upload/download handlers verify.
 
-**This is a storage-only provider.** It does not provide auth or sync. Pair it with `or3-provider-basic-auth` + `or3-provider-sqlite` (or Clerk + Convex) for a complete stack.
+**This is a storage-only provider.** It does not provide auth or sync. Pair it with `or3-provider-basic-auth` + `or3-provider-sqlite` or `or3-provider-convex` (or Clerk + Convex) for a complete stack.
+
+The host can queue small originals offline after loading the workspace's file
+settings in the current app session. Filesystem uploads resume on reconnect and
+still enforce the server's current policy.
 
 An internal [immutable-generation protocol](docs/immutable-generations.md) and real
 SQLite/filesystem race-test lane are available for development qualification.
@@ -85,6 +91,12 @@ $OR3_STORAGE_FS_ROOT/
 - **Safe downloads**: generic or active content is returned as an `application/octet-stream` attachment with `X-Content-Type-Options: nosniff`; only supported raster images and PDFs may remain inline.
 - **Symlink-safe downloads**: downloads resolve the real path and open with `O_NOFOLLOW`, rejecting anything that escapes the storage root.
 
+## Browser cache and workspace backups
+
+The host’s admin dashboard controls per-workspace upload and browser-cache limits. Large selected files can upload directly through this provider without IndexedDB persistence. Cache cleanup removes only verified redundant browser bytes; filesystem originals and commit sidecars are unaffected. Unknown local originals and unfinished uploads remain protected.
+
+The host’s Cloud workspace export streams a consistent canonical snapshot plus original binary files from this provider into `.or3cloud`. Restore verifies the archive and creates a fresh workspace through the existing upload reservation/commit and sync contracts. Operator deployment backups remain separate; see below for filesystem backup requirements.
+
 ## Backup
 
 The storage root is a plain directory tree. Back it up with any tool:
@@ -105,38 +117,72 @@ without deleting bytes or querying canonical state. Logical Trash/removal retain
 the original bytes. Independent canonical scans cannot prevent a concurrent
 restore or reference write.
 
-GC runs per workspace via the provider admin action `storage.gc` (default retention
-30 days, `retentionDays`/`retentionSeconds` and `limit` accepted in the action payload).
+The provider admin action `storage.gc` reports this disabled status for every sync
+backend; canonical read support does not enable physical deletion.
 
-### Read-only storage usage
+## Usage Accounting
 
-The workspace-scoped provider admin action `storage.usage` returns a bounded,
-non-atomic observation. Optional `maxEntries` and `maxMetadataRecords` limits
-default to 10,000 and accept integers from 1 through 50,000.
+OR3 Chat's admin Overview and Operations pages explain retained Trash files with
+the informational notice **Deleted files still use storage**. **View storage
+usage** opens the workspace chooser immediately in Operations when the provider
+supports it, from either notice. Select a workspace to inspect; canceling the
+chooser does not run the action and you can reopen it from the same notice.
+Results are brought into view, receive keyboard focus, name the selected workspace,
+and preserve scan limits and uncertainty. The notice's
+**Technical details** retains the provider diagnostic. No setting enables
+permanent cleanup, and this action does not empty Trash.
 
-Canonical active metadata, retained deleted metadata and upload reservations
-are separate from observed active blobs, retained blobs, incomplete transfers,
-sidecars and unclassified bytes. Unknown or failed canonical views are null,
-not zero. Filesystem counts are partial when `filesystem.complete` is false;
-check warnings before using them. Unsupported safe directory descriptor views
-also report an incomplete filesystem observation.
+The result summary shows readable active-file and Trash sizes from metadata,
+observed workspace file sizes on disk (including Trash and supporting files), and
+available space on the shared server filesystem. Unknown totals are omitted with
+a clear message; partial disk totals are labeled. **Show JSON** starts collapsed
+and exposes the full response, including completion flags and warnings.
 
-Apparent bytes count observed file names. Allocated bytes count unique observed
-inodes using filesystem block statistics, so hard links are deduplicated within
-this scan; they do not establish exclusive ownership or reclaimable bytes.
-Volume totals describe the entire backing filesystem, not workspace quota.
-Neither these observations nor retained metadata authorize physical cleanup.
-An observed `generations-v1` namespace is explicitly unclassified: its bytes are
-unknown and the filesystem observation is partial, even if legacy paths are empty.
+Under **Operations → Maintenance**, **File cleanup status** (`storage.gc`)
+explains that permanent cleanup is unavailable and the check does not delete
+files. Card descriptions wrap fully, including on narrow screens.
 
-### Dormant generation transfer research
+The **Storage usage** action (`storage.usage`) reports
+logical active/deleted metadata and upload reservations separately from observed
+filesystem bytes. It distinguishes active blobs, retained deleted blobs, incomplete
+transfers, sidecars, and unclassified files. Allocation deduplicates hard-linked
+inodes; volume totals describe the containing filesystem, not workspace quota.
+It never deletes bytes or returns deletion candidates.
 
-Default-disabled, unregistered upload/download/recovery factories and their
-real-filesystem/SQLite tests are described in
-[the immutable-generation protocol](docs/immutable-generations.md). They do not
-activate physical cleanup. Ready-only recovery, authenticated publication and
-bounded streaming are qualified separately from rollout prerequisites such as
-pre-ready recovery, client retry lookup and mixed legacy reads.
+The result has `consistency: "non_atomic_observation"`, start/end timestamps,
+completion flags, and warnings. Canonical totals become `null` when unavailable,
+malformed, or incomplete. Deleted metadata with unknown size also stays `null`.
+Retained accounting requires sync capability `retainedStorageMetadata: 'v1'`;
+older providers are not probed for unsupported queries. Blob classification requires
+matching canonical filesystem storage IDs. Missing legacy IDs, IDs for another
+provider/workspace, and ambiguous ownership stay unclassified with warnings. Filesystem totals are observed values even when the scan is
+partial; inspect `filesystem.complete` before interpreting them as a full scan.
+
+Each canonical view is bounded to 100 pages of at most 250 records. The directory
+scan is bounded to 10,000 entries; an action payload `limit` can lower that bound.
+No recursion or symlink traversal is performed. Directory metadata, databases,
+and other workspaces are outside the file totals.
+
+## Upload Quota Reservations
+
+When the sync provider supports both `reserveUploadIntent` and
+`consumeUploadIntent`, presigning reserves bytes atomically and returns an
+`intentId`; pass it back to the host commit endpoint as `intent_id`. Commit checks
+the object size and scoped storage ID, consumes the matching intent, then writes
+the sidecar. Exact intent consumption can be retried after a failed sidecar write
+within the original authorization lifetime with the matching current sync
+provider. After expiry, re-presign and upload with a fresh reservation. Signing failures release reservations
+when cancellation is supported; abandoned uploads expire.
+
+A configured hard workspace quota fails with HTTP 503 if the sync provider lacks
+the complete reservation/consumption pair. Without a quota, older sync providers
+can still use the original upload/commit flow. With an updated SQLite or Convex sync backend, the storage adapter delegates
+`atomicUploadQuota: 'retained-v1'`: committed hashes remain charged after Trash,
+logical deletion and intent expiry. Same-hash restores do not double-charge.
+The host can skip its catalog preflight only with that capability. Configure
+`OR3_STORAGE_WORKSPACE_QUOTA_BYTES` explicitly; the existing default is unlimited.
+Physical cleanup remains disabled, and incomplete/unclassified bytes can exist
+outside admission accounting.
 
 ## Development
 
@@ -166,11 +212,6 @@ generator from its pinned host revision before qualification and publication.
 | `Content type mismatch` (415) | Upload `Content-Type` differs from the token's `mime_type` | Send the declared `Content-Type` |
 | `Storage root must be absolute` | `OR3_STORAGE_FS_ROOT` is a relative path | Set an absolute path |
 
-## v2 TODOs
-
-- [x] Set `Content-Type` on downloads from the token's mime claim (done — with `application/octet-stream` fallback)
-- [ ] Add durable cross-backend deletion coordination before enabling physical cleanup. Commit sidecars and read-only accounting alone do not make deletion safe.
-
 ## Compatibility
 
 Works with any auth/sync provider combo. Tested against `or3-provider-basic-auth` + `or3-provider-sqlite` and `or3-provider-clerk` + `or3-provider-convex` stacks.
@@ -185,6 +226,16 @@ or failed builds fall back to installed packages with a warning.
 `OR3_LOCAL_PROVIDERS=false` disables local selection. Production builds use the
 installed package, so local development does not publish these changes.
 
-## Physical deletion coordination
+## Browser cache redundancy proofs
 
-Filesystem unlink and GC fail closed until a cross-backend deletion claim protocol exists. Independent canonical scans cannot prevent a restore/reference race. Existing physical objects return 503 from delete; GC reports disabled with `deletion_coordination_required`. Logical Files Trash/removal retains the bytes.
+When presign-download requests `verify_content: true`, the adapter securely opens
+the exact committed original with the existing no-symlink checks and streams its
+SHA-256 on the server. An exact match returns `verifiedContent: { hash, sizeBytes }`
+with the canonical storage ID. The browser can release a redundant cached copy
+without transferring the original again. Corruption returns an error and keeps
+the local copy. Normal presigning avoids this hash pass; authorization and
+physical deletion restrictions are unchanged.
+
+### Dormant generation transfers
+
+Default-disabled, unregistered upload/download/recovery factories are described in [the immutable-generation protocol](docs/immutable-generations.md). Physical cleanup remains disabled. The experimental generation-aware observer is separate from the existing `storage.usage` admin response.
