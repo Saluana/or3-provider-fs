@@ -14,6 +14,10 @@ The host can queue small originals offline after loading the workspace's file
 settings in the current app session. Filesystem uploads resume on reconnect and
 still enforce the server's current policy.
 
+An internal [immutable-generation protocol](docs/immutable-generations.md) and real
+SQLite/filesystem race-test lane are available for development qualification.
+They are dormant; production cleanup remains disabled and legacy paths are retained.
+
 The adapter only registers when auth and storage are enabled and `fs` is the active storage provider (e.g. `SSR_AUTH_ENABLED=true`, `OR3_STORAGE_ENABLED=true`, `NUXT_PUBLIC_STORAGE_PROVIDER=fs`). Otherwise registration is skipped with a startup warning.
 
 ## Install

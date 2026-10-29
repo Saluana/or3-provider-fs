@@ -40,6 +40,13 @@ jobs:
           repository: Saluana/or3-chat
           ref: ${{ vars.OR3_CHAT_CONTRACT_REF || '0bacbd46868c9c9be6cb242eb42f8bacd30bc1f9' }}
           path: or3-chat
+      # Mandatory test-only composition with the reviewed dormant coordinator.
+      # This checkout does not register a runtime capability or enable GC.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Saluana/or3-provider-sqlite
+          ref: c9d90e6202b84e476104aa33999b9943aa0696ee
+          path: sqlite
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24.22.1"
@@ -49,6 +56,9 @@ jobs:
           bun-version: 1.3.14
       - name: Prepare OR3 Chat host types
         working-directory: or3-chat
+        run: bun install --frozen-lockfile
+      - name: Prepare pinned SQLite integration dependency
+        working-directory: sqlite
         run: bun install --frozen-lockfile
       - run: npm install --global npm@11
       - run: bun install --frozen-lockfile
@@ -81,7 +91,11 @@ jobs:
           fi
       - run: bun run type-check
       - run: bun run type-check:standalone
+      - run: bun run type-check:generations
+      - run: bun run lint
       - run: bun run test
+      - name: Prove dormant SQLite and filesystem coordination
+        run: bun --bun run test:generations:sqlite
       - run: bun run build
       - name: Validate package archive
         run: npm pack --dry-run --json > "$RUNNER_TEMP/package-pack.json"
