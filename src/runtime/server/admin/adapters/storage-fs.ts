@@ -9,7 +9,7 @@ import type {
 } from '~~/server/admin/providers/types';
 import { createFsStorageGatewayAdapter } from '../../storage/fs-storage-gateway-adapter';
 import { validateFsStorageConfig } from '../../storage/fs-config';
-import { observeFsStorageUsage } from '../../storage/fs-usage';
+import { observeFsStorageUsage } from '../../storage/fs-storage-usage';
 
 const FS_PROVIDER_ID = 'fs';
 const DEFAULT_RETENTION_SECONDS = 30 * 24 * 3600;
@@ -46,8 +46,7 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
         }
         warnings.push({
             level: 'warning',
-            message:
-                'Physical filesystem cleanup is disabled until uploads, canonical writes, and deletion share a durable coordination protocol. Deleted bytes remain on disk.',
+            message: 'Destructive filesystem blob GC is disabled until provider-owned deletion coordination is available.',
         });
 
         return {
@@ -57,19 +56,18 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
                 urlTtlSeconds: diagnostics.config.urlTtlSeconds,
                 gcStatus: 'disabled',
                 gcDisabledReason: 'deletion_coordination_required',
-                usageObservation: 'on_demand',
             },
             warnings,
             actions: [
                 {
                     id: 'storage.gc',
-                    label: 'Check Storage GC Status',
-                    description: 'Reports that destructive GC is disabled; does not scan sync history or delete files.',
+                    label: 'File cleanup status',
+                    description: 'Permanent file cleanup is not available yet. This check does not delete any files.',
                 },
                 {
                     id: 'storage.usage',
-                    label: 'Observe Storage Usage',
-                    description: 'Read-only, bounded observation of logical metadata, retained bytes, incomplete transfers and disk allocation. Does not reclaim bytes.',
+                    label: 'Storage usage',
+                    description: 'See how much space a workspace uses, including files in Trash. This check does not delete files or free up space.',
                 },
             ],
         };
@@ -93,15 +91,7 @@ export const fsStorageAdminAdapter: ProviderAdminAdapter = {
         }
 
         if (actionId === 'storage.usage') {
-            for (const key of ['maxEntries', 'maxMetadataRecords']) {
-                if (payload?.[key] !== undefined && typeof payload[key] !== 'number') {
-                    throw createError({ statusCode: 400, statusMessage: 'Invalid observation limit' });
-                }
-            }
-            return observeFsStorageUsage(event, ctx.session.workspace.id, {
-                maxEntries: typeof payload?.maxEntries === 'number' ? payload.maxEntries : undefined,
-                maxMetadataRecords: typeof payload?.maxMetadataRecords === 'number' ? payload.maxMetadataRecords : undefined,
-            });
+            return await observeFsStorageUsage(event, ctx.session.workspace.id, payload);
         }
 
         const adapter = createFsStorageGatewayAdapter();
