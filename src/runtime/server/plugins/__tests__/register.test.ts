@@ -10,6 +10,11 @@ vi.mock('~~/server/storage/gateway/registry', () => ({
     registerStorageGatewayAdapter: registerStorageGatewayAdapterMock as unknown,
 }));
 
+// Registration validates configuration without resolving request sessions.
+// Keep host auth initialization outside this provider-boot contract suite.
+vi.mock('~~/server/auth/can', () => ({ requireCan: vi.fn() }));
+vi.mock('~~/server/auth/session', () => ({ resolveSessionContext: vi.fn() }));
+
 describe('fs register plugin', () => {
     beforeEach(() => {
         vi.resetModules();
