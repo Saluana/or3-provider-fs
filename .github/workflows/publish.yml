@@ -29,7 +29,7 @@ jobs:
       # commit SHA. The default is the current coordinated Chat revision.
       - name: Validate OR3 Chat contract reference
         env:
-          CONTRACT_REF: ${{ vars.OR3_CHAT_CONTRACT_REF || '0bacbd46868c9c9be6cb242eb42f8bacd30bc1f9' }}
+          CONTRACT_REF: ${{ vars.OR3_CHAT_CONTRACT_REF || 'a099d5a5cbaba4f321356e52d5de260140ec636b' }}
         run: |
           if ! [[ "$CONTRACT_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo 'OR3_CHAT_CONTRACT_REF must be a 40-character commit SHA.' >&2
@@ -38,14 +38,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Saluana/or3-chat
-          ref: ${{ vars.OR3_CHAT_CONTRACT_REF || '0bacbd46868c9c9be6cb242eb42f8bacd30bc1f9' }}
+          ref: ${{ vars.OR3_CHAT_CONTRACT_REF || 'a099d5a5cbaba4f321356e52d5de260140ec636b' }}
           path: or3-chat
       # Mandatory test-only composition with the reviewed dormant coordinator.
       # This checkout does not register a runtime capability or enable GC.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Saluana/or3-provider-sqlite
-          ref: 7b559d132fc4d7bd4714aeaeff991dab5a25d443
+          ref: 341bd19443334e57fea4e79017784cea7fc0331a
           path: sqlite
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

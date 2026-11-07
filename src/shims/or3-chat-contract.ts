@@ -53,5 +53,7 @@ export type resolveSessionContext<T = any, U = any, V = any, W = any, X = any> =
 export const resolveSessionContext: any = undefined;
 export type StorageGatewayAdapter<T = any, U = any, V = any, W = any, X = any> = any;
 export const StorageGatewayAdapter: any = undefined;
+export type StorageGenerationCandidatePage<T = any, U = any, V = any, W = any, X = any> = any;
+export const StorageGenerationCandidatePage: any = undefined;
 export type SyncGatewayAdapter<T = any, U = any, V = any, W = any, X = any> = any;
 export const SyncGatewayAdapter: any = undefined;
