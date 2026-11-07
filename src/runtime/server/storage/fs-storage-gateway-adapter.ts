@@ -1,3 +1,5 @@
+import { FsGenerationStore } from './fs-generations';
+import { createFsReclamationHandler } from './fs-reclamation';
 /**
  * @module fs-storage-gateway-adapter
  *
@@ -105,6 +107,15 @@ function parseGcInput(input: unknown): { workspaceId: string; retentionSeconds: 
 
 export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
     id = 'fs';
+
+    /** Explicitly scoped Linux cleanup; legacy transfers remain unchanged. */
+    get externalStorageGenerations() {
+        const namespace = process.env.OR3_STORAGE_FS_CLEANUP_NAMESPACE_ID;
+        if (process.platform !== 'linux' || !namespace) return undefined;
+        const store = new FsGenerationStore(getStorageRootOrThrow(), namespace);
+        return { version: 1 as const, syncProviderId: 'sqlite', reclaimBatch: createFsReclamationHandler(store) };
+    }
+
 
     get atomicUploadQuota() {
         return getActiveSyncGatewayAdapter()?.capabilities?.atomicUploadQuota;

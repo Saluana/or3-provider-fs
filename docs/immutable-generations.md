@@ -57,6 +57,17 @@ between claim, unlink, rmdir, directory fsync, and canonical acknowledgement.
 Permanent slot/manifest tombstones are never removed. Open unlinked files may
 still consume blocks; no result claims a reclaimed-byte total.
 
+The internal `fs-reclamation.ts` operation composes claim, removal and completion.
+An incomplete removal keeps its claim, and replay uses that same claim. A bounded
+pass re-inspects canonical candidates and retains its cursor when removal is pending.
+The dormant gateway exposes the same operation as `reclaim`; no production provider
+advertises it before qualification. Manual requests are limited to previewed generation
+identities. The host owns the opt-in retention schedule through
+`OR3_STORAGE_RETENTION_WORKSPACES`; it invokes the same qualified, audited batch path.
+The Mac integration lane uses real SQLite coordination and a simulated physical
+remover, including closing and reopening the database after interruption. Linux
+qualification must still exercise the actual descriptor-pinned filesystem primitive.
+
 ## Test-only composition
 
 The explicit integration lane uses the real SQLite provider, its full migrations
@@ -97,9 +108,8 @@ depends on the filesystem and SQLite honoring their sync guarantees.
 
 ## Activation blockers and operating limits
 
-- No authenticated generation-bound upload/download/commit dispatch, signed
-  generation/intent credentials, quota/reservation integration, abandonment
-  recovery, or runtime cleanup orchestration is implemented here.
+- The generation-bound transfer and reclamation factories are not registered in
+  the production runtime; no cleanup capability or retention scheduler is active.
 - No legacy adoption or migration is provided. Incomplete slots and unregistered
   payloads remain retained. Permanent tombstones need an explicit future
   namespace lifecycle policy rather than ad hoc pruning.

@@ -19,6 +19,7 @@ import type { ExternalStorageGenerationUploadIntent, ExternalStorageGenerationUp
 import { createFsGenerationTokenCodec, type FsGenerationTokenClaims } from './fs-generation-token';
 import { FsGenerationStore, type FsGenerationSpec } from './fs-generations';
 import { parseFsHash } from './fs-hash';
+import { createFsReclamationHandler } from './fs-reclamation';
 
 export interface FsGenerationDependencies {
     store: FsGenerationStore;
@@ -303,5 +304,9 @@ export function createFsGenerationGateway(options: { enabled?: boolean; resolve:
         // These are lifecycle observations, deliberately no reclaimed byte count.
         return { items, hasMore: page.hasMore, nextCursor: page.nextCursor };
     }
-    return { adapter, upload, download, recover };
+    async function reclaim(input: { workspaceId: string; retentionSeconds: number; limit: number; cursor?: string; generationIds: string[] }) {
+        const deps = dependencies();
+        return createFsReclamationHandler(deps.store)(input, deps.coordinator);
+    }
+    return { adapter, upload, download, recover, reclaim };
 }

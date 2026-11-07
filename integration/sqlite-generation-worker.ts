@@ -1,8 +1,8 @@
 /** Test-only real process, database, and filesystem actor. Never a runtime route. */
 import '../test/support/deny-outbound.mjs';
 import { createInterface } from 'node:readline';
-import { initializeSqliteDb, destroySqliteDb } from '../../sqlite/src/runtime/server/db/kysely';
-import { SqliteExternalStorageGenerationCoordinator } from '../../sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
+import { initializeSqliteDb, destroySqliteDb } from '../../or3-provider-sqlite/src/runtime/server/db/kysely';
+import { SqliteExternalStorageGenerationCoordinator } from '../../or3-provider-sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
 import { FsGenerationStore, type FsGenerationSpec } from '../src/runtime/server/storage/fs-generations';
 
 const [mode, root, namespaceId, database, serialized, pause] = process.argv.slice(2);

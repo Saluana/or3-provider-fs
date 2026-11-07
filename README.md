@@ -16,7 +16,18 @@ still enforce the server's current policy.
 
 An internal [immutable-generation protocol](docs/immutable-generations.md) and real
 SQLite/filesystem race-test lane are available for development qualification.
-They are dormant; production cleanup remains disabled and legacy paths are retained.
+Cleanup is disabled by default and legacy paths are retained. The filesystem
+reclamation operation replays durable claims and processes bounded candidate
+pages. The Linux adapter's opt-in registration is described below; both manual
+cleanup and the optional retention scheduler use the same canonical coordinator
+and filesystem remover. Installed registration qualification is tracked in the
+host's admin-customer-operations plan.
+Run the paired lane on Linux with `bun --bun run test:generations:sqlite`, with
+`../or3-provider-sqlite` and its dependencies present. The lane requires Bun SQLite
+and Linux descriptor-pinned directory operations; macOS cannot qualify deletion.
+The orchestration-only integration test runs on macOS with Bun and SQLite:
+`bun --bun run test:generations:sqlite -- integration/fs-reclamation-operation.test.ts`.
+An unavailable platform or missing checkout is a failure, never successful qualification.
 
 The adapter only registers when auth and storage are enabled and `fs` is the active storage provider (e.g. `SSR_AUTH_ENABLED=true`, `OR3_STORAGE_ENABLED=true`, `NUXT_PUBLIC_STORAGE_PROVIDER=fs`). Otherwise registration is skipped with a startup warning.
 
@@ -107,6 +118,8 @@ rsync -a "$OR3_STORAGE_FS_ROOT" /backup/or3-storage/
 
 Committed blobs create `.meta.json` sidecars. Include those files in backups.
 
+Enrolled immutable generations also bind their payload directories to filesystem identities. A raw copy changes those identities. The managed Cloud restore path authenticates the backup, validates canonical records and payload hashes, and rebinds directory identities offline before startup. Runtime substitution checks remain enabled; this does not qualify or activate cleanup.
+
 ## Deletion and Garbage Collection Safety
 
 Physical deletion is disabled until a provider-owned protocol can coordinate
@@ -181,8 +194,8 @@ can still use the original upload/commit flow. With an updated SQLite or Convex 
 logical deletion and intent expiry. Same-hash restores do not double-charge.
 The host can skip its catalog preflight only with that capability. Configure
 `OR3_STORAGE_WORKSPACE_QUOTA_BYTES` explicitly; the existing default is unlimited.
-Physical cleanup remains disabled, and incomplete/unclassified bytes can exist
-outside admission accounting.
+Legacy-file cleanup remains disabled, and incomplete/unclassified bytes can
+exist outside admission accounting.
 
 ## Development
 
@@ -238,4 +251,10 @@ physical deletion restrictions are unchanged.
 
 ### Dormant generation transfers
 
-Default-disabled, unregistered upload/download/recovery factories are described in [the immutable-generation protocol](docs/immutable-generations.md). Physical cleanup remains disabled. The experimental generation-aware observer is separate from the existing `storage.usage` admin response.
+Default-disabled, unregistered upload/download/recovery factories are described in [the immutable-generation protocol](docs/immutable-generations.md). The cleanup opt-in below does not activate those transfer routes. The experimental generation-aware observer is separate from the existing `storage.usage` admin response.
+
+### Opt-in enrolled-generation cleanup
+
+On Linux, the SQLite/filesystem pairing exposes managed-generation cleanup only when `OR3_STORAGE_FS_CLEANUP_NAMESPACE_ID` names the existing filesystem namespace UUID and SQLite runs with `OR3_SQLITE_PRAGMA_SYNCHRONOUS=FULL` (or `EXTRA`). The namespace must already have been provisioned by the generation protocol; this setting neither provisions it nor enrolls legacy files. It does not change normal upload/download routing. Leave the namespace setting unset to keep cleanup unavailable. D1 and other unsupported drivers remain unavailable.
+
+Manual admin cleanup rechecks canonical eligibility and uses the installed filesystem remover. Optional `OR3_STORAGE_RETENTION_WORKSPACES` selects explicit workspace IDs for the same audited primitive, with seven-day retention and at most 25 examined generations per hourly turn. Changing these environment settings requires a managed restart. Defaults remain disabled. Use the repaired managed backup/restore path for enrolled data; raw file copying is not a supported restore.

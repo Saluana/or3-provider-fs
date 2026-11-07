@@ -7,10 +7,10 @@ import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb, type SqliteRawDatabase } from '../../sqlite/src/runtime/server/db/kysely';
-import { runMigrations } from '../../sqlite/src/runtime/server/db/migrate';
-import { generationGuardTriggers } from '../../sqlite/src/runtime/server/db/storage-generation-guards';
-import { SqliteExternalStorageGenerationCoordinator } from '../../sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
+import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb, type SqliteRawDatabase } from '../../or3-provider-sqlite/src/runtime/server/db/kysely';
+import { runMigrations } from '../../or3-provider-sqlite/src/runtime/server/db/migrate';
+import { generationGuardTriggers } from '../../or3-provider-sqlite/src/runtime/server/db/storage-generation-guards';
+import { SqliteExternalStorageGenerationCoordinator } from '../../or3-provider-sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
 import { FsGenerationStore, type FsGenerationSpec } from '../src/runtime/server/storage/fs-generations';
 
 const data = Buffer.from('immutable verified bytes');
@@ -190,6 +190,11 @@ describe('dormant real SQLite claims with immutable filesystem generations', () 
 
     it.each(['claim_committed', 'entry_unlinked', 'payload_removed'])('replays durably after collector SIGKILL at %s', async phase => {
         await register();
+        raw.prepare('INSERT INTO retained_storage (workspace_id,hash,size_bytes) VALUES (?,?,?)').run(spec.workspaceId, hash, data.length);
+        metadata();
+        raw.exec('UPDATE s_file_meta SET deleted = 1');
+        const chargedBytes = () => (raw.prepare('SELECT used_bytes FROM storage_usage WHERE workspace_id = ?').get(spec.workspaceId) as { used_bytes: number } | undefined)?.used_bytes ?? 0;
+        expect(chargedBytes()).toBe(data.length);
         const remover = actor('remove', phase);
         expect(await remover.next()).toMatchObject({ event: 'paused' });
         expect((await coordinator.getGeneration(spec))?.state).toBe('claimed');
@@ -199,8 +204,15 @@ describe('dormant real SQLite claims with immutable filesystem generations', () 
         raw = getRawDb();
         coordinator = new SqliteExternalStorageGenerationCoordinator({ storageProviderId: 'fs' });
         expect((await coordinator.getGeneration(spec))?.state).toBe('claimed');
+        expect(chargedBytes()).toBe(data.length);
+        if (phase === 'claim_committed') expect(await readFile(join(slot(), 'payload', 'blob'))).toEqual(data);
         expect((await collect()).status).toBe(phase === 'payload_removed' ? 'already_absent' : 'removed');
         expect((await coordinator.getGeneration(spec))?.state).toBe('deleted');
+        // This fixture is not enrolled through the upload coordinator, so its
+        // legacy charge must remain even when the generation is removed.
+        expect(chargedBytes()).toBe(data.length);
+        expect((await collect()).status).toBe('already_absent');
+        expect(chargedBytes()).toBe(data.length);
         expect((await store.allocate(spec)).status).toBe('payload_missing');
     });
 

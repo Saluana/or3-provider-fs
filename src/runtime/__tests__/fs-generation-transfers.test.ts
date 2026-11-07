@@ -35,6 +35,7 @@ describe('unregistered generation factories', () => {
         await expect(gateway.adapter.presignDownload(event, { workspaceId: 'workspace', hash: identity.hash })).rejects.toMatchObject({ statusCode: 404 });
         await expect(gateway.adapter.commit!(event, {})).rejects.toMatchObject({ statusCode: 404 });
         await expect(gateway.recover({ workspaceId: 'workspace', retentionSeconds: 0 })).rejects.toMatchObject({ statusCode: 404 });
+        await expect(gateway.reclaim({ workspaceId: 'workspace', retentionSeconds: 604800, limit: 25, generationIds: [identity.generationId] })).rejects.toMatchObject({ statusCode: 404 });
         expect(resolve).not.toHaveBeenCalled();
         expect(gateway.adapter).not.toHaveProperty('deletionCoordination');
         expect(gateway.adapter).not.toHaveProperty('externalStorageGenerations');
