@@ -7,10 +7,10 @@ import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb, type SqliteRawDatabase } from '../../or3-provider-sqlite/src/runtime/server/db/kysely';
-import { runMigrations } from '../../or3-provider-sqlite/src/runtime/server/db/migrate';
-import { generationGuardTriggers } from '../../or3-provider-sqlite/src/runtime/server/db/storage-generation-guards';
-import { SqliteExternalStorageGenerationCoordinator } from '../../or3-provider-sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
+import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb, type SqliteRawDatabase } from '../../sqlite/src/runtime/server/db/kysely';
+import { runMigrations } from '../../sqlite/src/runtime/server/db/migrate';
+import { generationGuardTriggers } from '../../sqlite/src/runtime/server/db/storage-generation-guards';
+import { SqliteExternalStorageGenerationCoordinator } from '../../sqlite/src/runtime/server/storage/sqlite-generation-coordinator';
 import { FsGenerationStore, type FsGenerationSpec } from '../src/runtime/server/storage/fs-generations';
 
 const data = Buffer.from('immutable verified bytes');

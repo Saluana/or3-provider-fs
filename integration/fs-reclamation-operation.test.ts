@@ -6,9 +6,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb } from '../../or3-provider-sqlite/src/runtime/server/db/kysely';
-import { runMigrations } from '../../or3-provider-sqlite/src/runtime/server/db/migrate';
-import { SqliteExternalStorageGenerationUploadCoordinator } from '../../or3-provider-sqlite/src/runtime/server/storage/sqlite-generation-upload-coordinator';
+import { _resetForTest, destroySqliteDb, getRawDb, initializeSqliteDb } from '../../sqlite/src/runtime/server/db/kysely';
+import { runMigrations } from '../../sqlite/src/runtime/server/db/migrate';
+import { SqliteExternalStorageGenerationUploadCoordinator } from '../../sqlite/src/runtime/server/storage/sqlite-generation-upload-coordinator';
 import { createFsReclamationHandler, reclaimFsGeneration, reclaimFsGenerationBatch } from '../src/runtime/server/storage/fs-reclamation';
 
 const content = Buffer.from('retained data');
