@@ -10,6 +10,7 @@ import type { H3Event } from 'h3';
 import { createError } from 'h3';
 import { access, rename, unlink, writeFile, constants } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type {
     StorageGatewayAdapter,
     PresignUploadRequest,
@@ -252,6 +253,25 @@ export class FsStorageGatewayAdapter implements StorageGatewayAdapter {
             expiresAt: Date.now() + ttl * 1000,
             storageId: `${input.workspaceId}:${parsedHash.canonical}`,
         };
+    }
+
+    async readChatAttachment(event: H3Event, input: { workspaceId: string; hash: string; storageId: string }): Promise<Response> {
+        const hash = requireFsHash(input.hash).canonical;
+        const session = await resolveSessionContext(event);
+        if (!session.authenticated || !session.user) throw createError({ statusCode: 401, statusMessage: 'Unauthorized' });
+        requireCan(session, 'workspace.read', { kind: 'workspace', id: input.workspaceId });
+        if (input.storageId !== `${input.workspaceId}:${hash}`) throw createError({ statusCode: 404, statusMessage: 'File not found' });
+        const root = getStorageRootOrThrow();
+        let handle;
+        try {
+            const path = resolveFsObjectPath(root, input.workspaceId, hash);
+            await access(getFsObjectMetadataPath(path), constants.F_OK);
+            handle = await openFsObjectForDownload(root, path);
+        } catch {
+            throw createError({ statusCode: 404, statusMessage: 'File not found' });
+        }
+        try { return new Response(Readable.toWeb(handle.createReadStream()) as ReadableStream<Uint8Array>); }
+        catch (error) { await handle.close(); throw error; }
     }
 
     async commit(event: H3Event, input: unknown): Promise<void> {

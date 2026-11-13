@@ -6,10 +6,12 @@
  */
 import { eventHandler, getQuery, createError, sendStream, setResponseHeader } from 'h3';
 import { isAbsolute } from 'node:path';
+import { createHash } from 'node:crypto';
 import { requireCan } from '~~/server/auth/can';
 import { resolveSessionContext } from '~~/server/auth/session';
 import { verifyFsToken } from '../../../storage/fs-token';
 import { openFsObjectForDownload, resolveFsObjectPath } from '../../../storage/fs-paths';
+import { applyDownloadRange } from '../../../storage/download-range';
 
 export default eventHandler(async (event) => {
     const token = String(getQuery(event).token || '');
@@ -75,5 +77,13 @@ export default eventHandler(async (event) => {
     setResponseHeader(event, 'X-Content-Type-Options', 'nosniff');
     setResponseHeader(event, 'Cache-Control', 'private, no-store');
 
-    return sendStream(event, fileHandle.createReadStream());
+    try {
+        const stat = await fileHandle.stat();
+        const validator = createHash('sha256').update(JSON.stringify([claims.hash, stat.size, stat.ino, stat.mtimeMs, stat.ctimeMs])).digest('hex');
+        const range = applyDownloadRange(event, stat.size, `"${validator}"`);
+        return sendStream(event, fileHandle.createReadStream(range ?? undefined));
+    } catch (error) {
+        await fileHandle.close();
+        throw error;
+    }
 });

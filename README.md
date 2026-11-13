@@ -101,6 +101,8 @@ $OR3_STORAGE_FS_ROOT/
 - **MIME enforcement**: when the token carries a `mime_type` claim, the upload `Content-Type` must match it (415).
 - **Safe downloads**: generic or active content is returned as an `application/octet-stream` attachment with `X-Content-Type-Options: nosniff`; only supported raster images and PDFs may remain inline.
 - **Symlink-safe downloads**: downloads resolve the real path and open with `O_NOFOLLOW`, rejecting anything that escapes the storage root.
+- **Resumable downloads**: authenticated legacy downloads support one byte range, strong ETags and `If-Range`, with complete responses for older clients. Every request rechecks workspace access and remains `private, no-store`.
+- **Chat originals**: the optional server-only chat read requires the same workspace authorization, exact filesystem identity and committed sidecar. The host verifies canonical live metadata, content size and hash before dispatch.
 
 ## Browser cache and workspace backups
 

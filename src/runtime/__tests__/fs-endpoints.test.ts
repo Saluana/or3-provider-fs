@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { H3Event } from 'h3';
+import { createApp, toWebHandler, type H3Event } from 'h3';
 import downloadHandler from '../server/api/storage/fs/download.get';
 import uploadHandler from '../server/api/storage/fs/upload.put';
 import { resolveFsObjectPath } from '../server/storage/fs-paths';
@@ -78,6 +78,9 @@ function createMockEvent(input: {
         },
         getHeader(name: string) {
             return responseHeaders.get(name.toLowerCase());
+        },
+        removeHeader(name: string) {
+            responseHeaders.delete(name.toLowerCase());
         },
         getHeaders() {
             return Object.fromEntries(responseHeaders.entries());
@@ -283,6 +286,75 @@ describe('fs upload/download handlers', () => {
         expect(responseHeaders.getHeader('x-content-type-options')).toBe('nosniff');
     });
 
+    it('serves authenticated byte ranges and restarts when the validator changes', async () => {
+        const payload = Buffer.from('0123456789');
+        const hash = makeSha256Hash(payload);
+        const objectPath = resolveFsObjectPath(storageRoot, 'ws1', hash);
+        await mkdir(dirname(objectPath), { recursive: true });
+        await writeFile(objectPath, payload);
+        const token = signFsToken({ op: 'download', workspace_id: 'ws1', user_id: 'user-1', hash }, 300);
+        const request = (headers: Record<string, string> = {}) => createMockEvent({
+            method: 'GET', path: `/api/storage/fs/download?token=${encodeURIComponent(token)}`, headers,
+        });
+        const full = request();
+        await downloadHandler(full);
+        const fullRes = full.node.res as unknown as { _data: NodeJS.ReadableStream; getHeader(name: string): string; statusCode: number };
+        expect(await readNodeStream(fullRes._data)).toEqual(payload);
+        expect(fullRes.getHeader('content-length')).toBe(10);
+        const etag = fullRes.getHeader('etag');
+        expect(etag).toMatch(/^"[^" ]+"$/);
+        const partial = request({ range: 'bytes=3-6', 'if-range': etag });
+        await downloadHandler(partial);
+        const partialRes = partial.node.res as unknown as typeof fullRes;
+        expect(partialRes.statusCode).toBe(206);
+        expect(partialRes.getHeader('content-range')).toBe('bytes 3-6/10');
+        expect(partialRes.getHeader('content-length')).toBe(4);
+        expect(partialRes.getHeader('cache-control')).toBe('private, no-store');
+        expect(await readNodeStream(partialRes._data)).toEqual(Buffer.from('3456'));
+        const suffix = request({ range: 'bytes=-3' });
+        await downloadHandler(suffix);
+        const suffixRes = suffix.node.res as unknown as typeof fullRes;
+        expect(suffixRes.statusCode).toBe(206);
+        expect(suffixRes.getHeader('content-range')).toBe('bytes 7-9/10');
+        expect(await readNodeStream(suffixRes._data)).toEqual(Buffer.from('789'));
+        const restart = request({ range: 'bytes=3-', 'if-range': '"different"' });
+        await downloadHandler(restart);
+        const restartRes = restart.node.res as unknown as typeof fullRes;
+        expect(await readNodeStream(restartRes._data)).toEqual(payload);
+        const invalid = request({ range: 'bytes=99-' });
+        await expect(downloadHandler(invalid)).rejects.toMatchObject({ statusCode: 416 });
+        expect((invalid.node.res as unknown as typeof fullRes).getHeader('content-range')).toBe('bytes */10');
+        requireCanMock.mockImplementationOnce(() => { throw Object.assign(new Error('Forbidden'), { statusCode: 403 }); });
+        await expect(downloadHandler(request({ range: 'bytes=3-', 'if-range': etag }))).rejects.toMatchObject({ statusCode: 403 });
+        await writeFile(objectPath, Buffer.from('abcdefghij'));
+        const changed = request({ range: 'bytes=3-', 'if-range': etag });
+        await downloadHandler(changed);
+        const changedRes = changed.node.res as unknown as typeof fullRes;
+        expect(changedRes.getHeader('etag')).not.toBe(etag);
+        expect(await readNodeStream(changedRes._data)).toEqual(Buffer.from('abcdefghij'));
+    });
+
+    it('delivers 206 and 416 responses through the HTTP adapter', async () => {
+        const payload = Buffer.from('0123456789');
+        const hash = makeSha256Hash(payload);
+        const objectPath = resolveFsObjectPath(storageRoot, 'ws1', hash);
+        await mkdir(dirname(objectPath), { recursive: true });
+        await writeFile(objectPath, payload);
+        const token = signFsToken({ op: 'download', workspace_id: 'ws1', user_id: 'user-1', hash }, 300);
+        const app = createApp();
+        app.use(downloadHandler);
+        const request = toWebHandler(app);
+        const url = `http://localhost/api/storage/fs/download?token=${encodeURIComponent(token)}`;
+        const partial = await request(new Request(url, { headers: { range: 'bytes=2-4' } }));
+        expect(partial.status).toBe(206);
+        expect(partial.headers.get('content-range')).toBe('bytes 2-4/10');
+        expect(await partial.text()).toBe('234');
+        const invalid = await request(new Request(url, { headers: { range: 'bytes=99-' } }));
+        expect(invalid.status).toBe(416);
+        expect(invalid.headers.get('content-range')).toBe('bytes */10');
+        expect(invalid.headers.get('content-length')).not.toBe('10');
+    });
+
     it('rejects download for token subject mismatch', async () => {
         const payload = Buffer.from('download mismatch');
         const hash = makeSha256Hash(payload);
@@ -376,10 +448,17 @@ describe('fs upload/download handlers', () => {
             ),
         ).resolves.toEqual({ ok: true, storage_id: `${workspaceId}:${hash}` });
 
+        await expect(adapter.readChatAttachment({} as H3Event, { workspaceId, hash, storageId: `${workspaceId}:${hash}` }))
+            .rejects.toMatchObject({ statusCode: 404 });
         await adapter.commit({} as H3Event, {
             workspace_id: workspaceId,
             hash,
         });
+
+        const chatOriginal = await adapter.readChatAttachment({} as H3Event, { workspaceId, hash, storageId: `${workspaceId}:${hash}` });
+        expect(Buffer.from(await chatOriginal.arrayBuffer())).toEqual(payload);
+        await expect(adapter.readChatAttachment({} as H3Event, { workspaceId, hash, storageId: `other:${hash}` }))
+            .rejects.toMatchObject({ statusCode: 404 });
 
         const downloadToken = signFsToken(
             {
